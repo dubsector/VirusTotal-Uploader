@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>VirusTotal Uploader</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 10px;
+      width: 300px;
+      position: relative;
+    }
+    #status, #error {
+      margin-top: 10px;
+      font-size: 14px;
+      word-wrap: break-word;
+    }
+    #status {
+      color: green;
+    }
+    #error {
+      color: red;
+    }
+    input[type="file"] {
+      margin-top: 10px;
+    }
+    /* Footer styling */
+    #footer {
+      margin-top: 10px;
+      text-align: right;
+      font-size: 12px;
+    }
+    #footer a {
+      color: #000;
+      text-decoration: none;
+    }
+    #footer a:hover {
+      text-decoration: underline;
+    }
+    /* Settings gear icon */
+    #settings {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      cursor: pointer;
+    }
+    #settings img {
+      width: 20px;
+      height: 20px;
+    }
+    /* Progress bar styling */
+    #progressContainer {
+      margin-top: 10px;
+      width: 100%;
+      background-color: #f3f3f3;
+      border-radius: 5px;
+      overflow: hidden;
+      height: 20px;
+      display: none; /* Hidden initially */
+    }
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background-color: #4caf50;
+    }
+  </style>
+</head>
+<body>
+  <!-- Settings gear icon -->
+  <div id="settings">
+    <img src="gear.png" alt="Settings">
+  </div>
+
+  <h2>Upload to VirusTotal</h2>
+  <input type="file" id="fileInput">
+  <div id="progressContainer">
+    <div id="progressBar"></div>
+  </div>
+  <div id="status"></div>
+  <div id="error"></div>
+
+  <!-- Footer with link to your site -->
+  <div id="footer">
+    <a href="https://dubsector.dev" target="_blank">dubsector.dev</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
