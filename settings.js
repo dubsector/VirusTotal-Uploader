@@ -1,7 +1,10 @@
+
 document.addEventListener('DOMContentLoaded', () => {
   const apiKeyInput = document.getElementById('apiKey');
   const saveButton = document.getElementById('saveButton');
   const messageDiv = document.getElementById('message');
+  const donateButton = document.getElementById('donateButton');
+  const closeButton = document.getElementById('closeButton');
 
   // Load the saved API key
   chrome.storage.sync.get(['apiKey'], function (result) {
@@ -23,5 +26,15 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       messageDiv.textContent = 'Please enter a valid API key.';
     }
+  });
+
+  // Donate button: Open BuyMeACoffee link in a new tab
+  donateButton.addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://buymeacoffee.com/dubsector' });
+  });
+
+  // Close button: Close the settings page
+  closeButton.addEventListener('click', () => {
+    window.close();
   });
 });
