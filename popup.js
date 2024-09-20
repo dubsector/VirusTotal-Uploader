@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', function () {
   const fileInput = document.getElementById('fileInput');
   const statusDiv = document.getElementById('status');
@@ -10,8 +9,15 @@ document.addEventListener('DOMContentLoaded', function () {
   chrome.storage.local.get(['percentComplete', 'uploadInProgress', 'fileName'], function (result) {
     if (result.uploadInProgress) {
       progressContainer.style.display = 'block';
-      progressBar.style.width = `${result.percentComplete}%`;
-      statusDiv.textContent = `Uploading ${result.fileName}... ${result.percentComplete}%`;
+      // If upload is already complete, show 100% progress immediately
+      if (result.percentComplete === 100) {
+        progressBar.style.display = 'none';  // Hide progress bar after completion
+        statusDiv.textContent = `Upload complete for ${result.fileName} (100%)`;
+      } else {
+        // Otherwise, show the progress as it was when the popup was closed
+        progressBar.style.width = `${result.percentComplete}%`;
+        statusDiv.textContent = `Uploading ${result.fileName}... ${result.percentComplete}%`;
+      }
     }
   });
 
@@ -46,6 +52,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Show progress container and reset the progress bar
         progressContainer.style.display = 'block';
         progressBar.style.width = '0%';
+        progressBar.style.display = 'block';  // Reset and show the progress bar
         statusDiv.textContent = `Uploading ${file.name}... 0%`;
       };
       reader.readAsArrayBuffer(file);
@@ -59,8 +66,10 @@ document.addEventListener('DOMContentLoaded', function () {
       statusDiv.textContent = `Uploading ${message.fileName}... ${message.percentComplete}%`;
     } else if (message.action === 'uploadComplete') {
       chrome.tabs.create({ url: message.resultsUrl });
-      statusDiv.textContent = 'Upload complete!';
-      progressContainer.style.display = 'none';
+      statusDiv.textContent = `Upload complete for ${message.fileName} (100%)`;
+
+      // Hide the progress bar once the upload is complete
+      progressBar.style.display = 'none';
     } else if (message.action === 'uploadError') {
       errorDiv.textContent = `Upload failed: ${message.error}`;
     }
