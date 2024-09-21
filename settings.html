@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -26,9 +25,18 @@
       margin-top: 10px;
       font-size: 14px;
     }
-    /* Styling for Donate, Close, and Save buttons */
     #buttonsContainer {
       margin-top: 20px;
+    }
+    /* New CSS to align the checkbox with the label */
+    .inline-checkbox {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .inline-checkbox label {
+      margin: 0;
+      margin-right: 10px;
     }
   </style>
 </head>
@@ -36,6 +44,14 @@
   <h2>Settings</h2>
   <label for="apiKey">VirusTotal API Key:</label>
   <input type="text" id="apiKey" placeholder="Enter your API key">
+
+  <!-- Add premium account option with checkbox next to the label -->
+  <div class="inline-checkbox">
+    <label for="premiumAccount">Premium Account:</label>
+    <input type="checkbox" id="premiumAccount">
+  </div>
+  <p>Only enable if you have a Premium VirusTotal account. Increases file upload limit to 550MB.</p>
+
   <div id="buttonsContainer">
     <button id="saveButton">Save</button>
     <button id="closeButton">Close</button>
