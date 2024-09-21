@@ -1,3 +1,4 @@
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'uploadFile') {
     const { fileName, fileData, apiKey } = message;
@@ -74,14 +75,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               });
 
               // Always attempt to open the report, regardless of whether the popup is open or closed
-              chrome.runtime.sendMessage({ action: 'uploadComplete', resultsUrl }).catch((error) => {
-                console.log("Popup not open to show completion:", error);
-              });
-
-              // Open the report directly regardless of the popup state
+              // Ensure only one report is opened
               chrome.tabs.create({ url: resultsUrl }, () => {
                 console.log("Report opened successfully");
               });
+              
+              // Do not send a duplicate message to open the report in popup.js
             }, 1000);  // Give a small delay before final completion
           }).catch(error => {
             clearTimeout(simulationInterval);  // Stop the simulation on error
