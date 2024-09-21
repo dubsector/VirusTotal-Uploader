@@ -5,21 +5,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const progressContainer = document.getElementById('progressContainer');
   const progressBar = document.getElementById('progressBar');
 
-  // Check if there's any ongoing upload progress and retrieve the filename when the popup opens
-  chrome.storage.local.get(['percentComplete', 'uploadInProgress', 'fileName'], function (result) {
-    if (result.uploadInProgress) {
-      progressContainer.style.display = 'block';
-      // If upload is already complete, show 100% progress immediately
-      if (result.percentComplete === 100) {
-        progressBar.style.display = 'none';  // Hide progress bar after completion
-        statusDiv.textContent = `Upload complete for ${result.fileName} (100%)`;
-      } else {
-        // Otherwise, show the progress as it was when the popup was closed
-        progressBar.style.width = `${result.percentComplete}%`;
-        statusDiv.textContent = `Uploading ${result.fileName}... ${result.percentComplete}%`;
-      }
-    }
-  });
+  // File size limits
+  const freeLimit = 32 * 1024 * 1024; // 32 MB
+  const premiumLimit = 550 * 1024 * 1024; // 550 MB
 
   fileInput.addEventListener('change', function () {
     if (fileInput.files.length === 0) {
@@ -29,16 +17,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const file = fileInput.files[0];
 
-    // Check if API key is set
-    chrome.storage.sync.get(['apiKey'], function (result) {
+    // Check if API key is set and get the premium account status
+    chrome.storage.sync.get(['apiKey', 'premiumAccount'], function (result) {
       if (!result.apiKey) {
         errorDiv.textContent = 'Please set your API key in the settings.';
         return;
       }
 
       const apiKey = result.apiKey;
+      const premiumAccount = result.premiumAccount || false;
+      const fileLimit = premiumAccount ? premiumLimit : freeLimit;
 
-      // Send the file data to the background script immediately
+      // Check if the file exceeds the allowed size
+      if (file.size > fileLimit) {
+        const limitMB = premiumAccount ? '550MB' : '32MB';
+        errorDiv.innerHTML = `File size exceeds the ${limitMB} limit. <a href="https://www.virustotal.com/gui/home/upload" target="_blank">Upload larger files here</a>.`;
+        return;
+      }
+
+      // Proceed with the upload if file size is valid
       const reader = new FileReader();
       reader.onload = function(event) {
         const arrayBuffer = event.target.result;
@@ -59,7 +56,12 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  // Listen for updates from the background script
+  // Ensure the settings gear icon can open the settings page
+  document.getElementById('settings').addEventListener('click', () => {
+    chrome.runtime.openOptionsPage();
+  });
+
+  // Listen for messages from the background script (handle real progress updates)
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === 'uploadProgress') {
       progressBar.style.width = `${message.percentComplete}%`;
@@ -73,10 +75,5 @@ document.addEventListener('DOMContentLoaded', function () {
     } else if (message.action === 'uploadError') {
       errorDiv.textContent = `Upload failed: ${message.error}`;
     }
-  });
-
-  // Open settings on gear icon click
-  document.getElementById('settings').addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
   });
 });
