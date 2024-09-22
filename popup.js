@@ -1,3 +1,5 @@
+// popup.js
+
 document.addEventListener('DOMContentLoaded', function () {
   const fileInput = document.getElementById('fileInput');
   const statusDiv = document.getElementById('status');
@@ -5,75 +7,208 @@ document.addEventListener('DOMContentLoaded', function () {
   const progressContainer = document.getElementById('progressContainer');
   const progressBar = document.getElementById('progressBar');
 
-  // File size limits
   const freeLimit = 32 * 1024 * 1024; // 32 MB
   const premiumLimit = 550 * 1024 * 1024; // 550 MB
+  const maxRetries = 3; // Ensure this matches the value in background.js
+
+  // Initialize UI elements to default hidden state
+  progressContainer.style.display = 'none';
+  progressBar.style.width = '0%';
+  progressBar.style.backgroundColor = '';
+  statusDiv.textContent = '';
+  errorDiv.textContent = '';
 
   fileInput.addEventListener('change', function () {
+    errorDiv.textContent = ''; // Clear any previous errors
+    statusDiv.textContent = ''; // Clear any previous status messages
+
     if (fileInput.files.length === 0) {
-      errorDiv.textContent = 'Please select a file to upload.';
+      errorDiv.textContent = 'Please select files to upload.';
       return;
     }
 
-    const file = fileInput.files[0];
+    const files = Array.from(fileInput.files);
 
-    // Check if API key is set and get the premium account status
     chrome.storage.sync.get(['apiKey', 'premiumAccount'], function (result) {
       if (!result.apiKey) {
         errorDiv.textContent = 'Please set your API key in the settings.';
         return;
       }
 
-      const apiKey = result.apiKey;
       const premiumAccount = result.premiumAccount || false;
       const fileLimit = premiumAccount ? premiumLimit : freeLimit;
 
-      // Check if the file exceeds the allowed size
-      if (file.size > fileLimit) {
+      // Filter out files that exceed the size limit
+      const validFiles = files.filter(file => file.size <= fileLimit);
+      const oversizedFiles = files.filter(file => file.size > fileLimit);
+
+      if (oversizedFiles.length > 0) {
         const limitMB = premiumAccount ? '550MB' : '32MB';
-        errorDiv.innerHTML = `File size exceeds the ${limitMB} limit. <a href="https://www.virustotal.com/gui/home/upload" target="_blank">Upload larger files here</a>.`;
+        errorDiv.innerHTML = `Some files exceed the ${limitMB} limit and will not be uploaded.`;
+      }
+
+      if (validFiles.length === 0) {
+        errorDiv.textContent = 'No files to upload within the size limit.';
         return;
       }
 
-      // Proceed with the upload if file size is valid
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        const arrayBuffer = event.target.result;
-        chrome.runtime.sendMessage({
-          action: 'uploadFile',
-          fileName: file.name,
-          fileData: Array.from(new Uint8Array(arrayBuffer)),
-          apiKey: apiKey
-        });
+      // Order the new files by size (smallest to largest)
+      validFiles.sort((a, b) => a.size - b.size);
 
-        // Show progress container and reset the progress bar
-        progressContainer.style.display = 'block';
-        progressBar.style.width = '0%';
-        progressBar.style.display = 'block';  // Reset and show the progress bar
-        statusDiv.textContent = `Uploading ${file.name}... 0%`;
-      };
-      reader.readAsArrayBuffer(file);
+      validFiles.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+          const arrayBuffer = event.target.result;
+          chrome.runtime.sendMessage({
+            action: 'queueFile',
+            fileName: file.name,
+            fileSize: file.size,
+            fileData: Array.from(new Uint8Array(arrayBuffer))
+          });
+        };
+        reader.readAsArrayBuffer(file);
+      });
+
+      // Reset file input
+      fileInput.value = '';
+
+      // **Modification Start**
+      // Before resetting UI elements, check if there's an upload in progress or waiting
+      chrome.storage.local.get(['uploadInProgress', 'waitingForNextUpload'], (data) => {
+        if (!data.uploadInProgress && !data.waitingForNextUpload) {
+          // Show initial status if no upload is in progress or waiting
+          progressContainer.style.display = 'block';
+          progressBar.style.width = '0%';
+          progressBar.style.display = 'block';  // Reset and show the progress bar
+          statusDiv.textContent = `Files queued for upload.`;
+          progressBar.style.backgroundColor = ''; // Reset color to default
+        } else {
+          // If an upload is in progress or waiting, do not reset the UI elements
+          statusDiv.textContent = `Files queued for upload. Current upload in progress.`;
+        }
+      });
+      // **Modification End**
     });
   });
 
-  // Ensure the settings gear icon can open the settings page
   document.getElementById('settings').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
   });
 
-  // Listen for messages from the background script (handle real progress updates)
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'uploadProgress') {
-      progressBar.style.width = `${message.percentComplete}%`;
-      statusDiv.textContent = `Uploading ${message.fileName}... ${message.percentComplete}%`;
-    } else if (message.action === 'uploadComplete') {
-      chrome.tabs.create({ url: message.resultsUrl });
-      statusDiv.textContent = `Upload complete for ${message.fileName} (100%)`;
+  // Connect to the background script for live updates
+  const port = chrome.runtime.connect({ name: "popup" });
 
-      // Hide the progress bar once the upload is complete
-      progressBar.style.display = 'none';
-    } else if (message.action === 'uploadError') {
-      errorDiv.textContent = `Upload failed: ${message.error}`;
+  let countdownInterval = null;
+
+  // Fetch the saved progress or waiting state when the popup opens
+  chrome.storage.local.get(['uploadInProgress', 'percentComplete', 'fileName', 'waitingForNextUpload', 'retryCount', 'waitTime'], (data) => {
+    // Only update UI after data retrieval
+    if (data.uploadInProgress && data.percentComplete && data.fileName) {
+      // Show upload progress
+      progressContainer.style.display = 'block';
+      progressBar.style.width = `${data.percentComplete}%`;
+      statusDiv.textContent = `Uploading ${data.fileName}... ${data.percentComplete}%`;
+      progressBar.style.backgroundColor = ''; // Reset color to default
+    } else if (data.waitingForNextUpload && data.fileName) {
+      // Show waiting state
+      progressContainer.style.display = 'block';
+
+      if (data.retryCount && data.retryCount > 0) {
+        // Handle retry waiting state
+        let remainingTime = parseInt(data.waitTime, 10);
+        statusDiv.textContent = `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName} in ${remainingTime} seconds.`;
+        progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
+        progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
+        startCountdown(remainingTime, `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName}`);
+      } else {
+        if (data.waitTime) {
+          let remainingTime = parseInt(data.waitTime, 10);
+          statusDiv.textContent = `Waiting to upload ${data.fileName} in ${remainingTime} seconds.`;
+          startCountdown(remainingTime, `Waiting to upload ${data.fileName}`);
+        } else {
+          statusDiv.textContent = `Waiting to upload ${data.fileName}...`;
+        }
+        progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
+        progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
+      }
+    } else {
+      // No ongoing upload
+      progressContainer.style.display = 'none';
+      statusDiv.textContent = '';
     }
   });
+
+  // Listen for real-time updates from the background script
+  port.onMessage.addListener((message) => {
+    if (message.action === 'uploadRetry') {
+      // Handle retry state
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
+      progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
+
+      let remainingTime = parseInt(message.waitTime, 10);
+      statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ${remainingTime} seconds.`;
+      startCountdown(remainingTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
+    } else if (message.action === 'uploadProgress') {
+      // Handle upload progress
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+      progressContainer.style.display = 'block';
+      progressBar.style.width = `${message.percentComplete}%`;
+      statusDiv.textContent = `Uploading ${message.fileName}... ${message.percentComplete}%`;
+      progressBar.style.backgroundColor = ''; // Reset to default color during actual upload
+    } else if (message.action === 'waitingForNextUpload') {
+      // Handle waiting state
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '100%'; // Show the bar as full to indicate waiting
+      progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
+
+      let remainingTime = parseInt(message.waitTime, 10);
+      statusDiv.textContent = `Waiting to upload ${message.fileName} in ${remainingTime} seconds.`;
+      startCountdown(remainingTime, `Waiting to upload ${message.fileName}`);
+    } else if (message.action === 'uploadComplete') {
+      // Handle upload completion
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+      statusDiv.textContent = `Upload complete for ${message.fileName} (100%)`;
+      progressBar.style.display = 'none';
+    } else if (message.action === 'uploadError') {
+      // Handle upload error
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+      errorDiv.textContent = `Upload failed: ${message.error}`;
+      progressBar.style.display = 'none';
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+    }
+    port.disconnect();
+  });
+
+  function startCountdown(remainingTime, statusPrefix) {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+    }
+
+    countdownInterval = setInterval(() => {
+      remainingTime -= 1;
+      if (remainingTime <= 0) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+        statusDiv.textContent = `Uploading...`;
+        progressBar.style.backgroundColor = ''; // Reset to default color
+      } else {
+        statusDiv.textContent = `${statusPrefix} in ${remainingTime} seconds.`;
+      }
+    }, 1000);
+  }
 });

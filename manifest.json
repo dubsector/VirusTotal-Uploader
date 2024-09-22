@@ -2,7 +2,7 @@
 {
   "manifest_version": 3,
   "name": "VirusTotal Uploader",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "Upload files to VirusTotal for scanning.",
   "icons": {
     "16": "icons/icon16.png",
@@ -21,7 +21,8 @@
   "options_page": "settings.html",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
     "https://www.virustotal.com/*"
