@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html>
 <head>
@@ -12,7 +13,7 @@
       display: block;
       margin-bottom: 5px;
     }
-    input[type="text"] {
+    input[type="text"], input[type="password"] {
       width: 100%;
       padding: 5px;
       margin-bottom: 10px;
@@ -28,7 +29,6 @@
     #buttonsContainer {
       margin-top: 20px;
     }
-    /* New CSS to align the checkbox with the label */
     .inline-checkbox {
       display: flex;
       align-items: center;
@@ -43,9 +43,9 @@
 <body>
   <h2>Settings</h2>
   <label for="apiKey">VirusTotal API Key:</label>
-  <input type="text" id="apiKey" placeholder="Enter your API key">
+  <!-- Initially a password field for privacy, switches to text on focus -->
+  <input type="password" id="apiKey" placeholder="Enter your API key">
 
-  <!-- Add premium account option with checkbox next to the label -->
   <div class="inline-checkbox">
     <label for="premiumAccount">Premium Account:</label>
     <input type="checkbox" id="premiumAccount">
