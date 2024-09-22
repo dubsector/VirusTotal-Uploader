@@ -186,6 +186,15 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       statusDiv.textContent = `Upload complete for ${message.fileName} (100%)`;
       progressBar.style.display = 'none';
+
+      // **New: Display a link to view the results**
+      const resultLink = document.createElement('a');
+      resultLink.href = `https://www.virustotal.com/gui/file/${message.sha256}/detection`;
+      resultLink.textContent = 'View Results';
+      resultLink.target = '_blank';
+      errorDiv.innerHTML = ''; // Clear previous errors
+      statusDiv.appendChild(document.createElement('br')); // Line break
+      statusDiv.appendChild(resultLink);
     } else if (message.action === 'uploadError') {
       // Handle upload error
       if (countdownInterval) {

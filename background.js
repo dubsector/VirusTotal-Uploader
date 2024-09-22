@@ -264,9 +264,15 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
 
     const uploadStartTimeFetch = Date.now();
 
-    const response = await fetch('https://www.virustotal.com/vtapi/v2/file/scan', {
+    // **API v3 Upload Endpoint and Headers**
+    const response = await fetch('https://www.virustotal.com/api/v3/files', {
       method: 'POST',
-      body: createFormData(blob, fileName, apiKey),
+      headers: {
+        'x-apikey': apiKey, // API v3 uses x-apikey header for authentication
+        // Alternatively, you can use the Authorization header with Bearer token
+        // 'Authorization': `Bearer ${apiKey}`,
+      },
+      body: createFormData(blob, fileName),
     });
 
     const uploadDuration = ((Date.now() - uploadStartTimeFetch) / 1000).toFixed(2);
@@ -308,10 +314,9 @@ async function decryptApiKey(credentials) {
 }
 
 // Create Form Data for Upload
-function createFormData(blob, fileName, apiKey) {
+function createFormData(blob, fileName) {
   const formData = new FormData();
   formData.append('file', blob, fileName);
-  formData.append('apikey', apiKey);
   return formData;
 }
 
@@ -360,7 +365,8 @@ async function handleUploadResponse(
       );
 
       if (
-        response.status === 204 ||
+        response.status === 429 || // Too Many Requests
+        response.status === 204 || // No Content (possible rate limit)
         responseText.includes('Too many requests')
       ) {
         console.warn(
@@ -384,16 +390,23 @@ async function handleUploadResponse(
 
     const resultData = await response.json();
 
+    // **API v3 Response Handling**
+    // API v3 returns data in a different structure. Typically, it includes a 'data' object with 'id' and other metadata.
+    const fileId = resultData.data.id; // Unique identifier for the uploaded file
+    const sha256 = resultData.data.attributes.sha256; // SHA256 hash of the file
+
     if (popupPort) {
       popupPort.postMessage({
         action: 'uploadProgress',
         percentComplete: 100,
         fileName,
       });
-      // Optionally, send a message indicating upload completion
+      // Send a message indicating upload completion with fileId and sha256
       popupPort.postMessage({
         action: 'uploadComplete',
         fileName,
+        fileId,
+        sha256,
       });
     }
 
@@ -407,8 +420,10 @@ async function handleUploadResponse(
       `[${new Date().toLocaleTimeString()}] Upload duration for ${fileName}: ${uploadDuration} seconds.`
     );
 
+    // **Update to Handle API v3 URLs**
+    // Using the SHA256 hash from the response to construct the URL for viewing the scan results.
     chrome.tabs.create({
-      url: `https://www.virustotal.com/gui/file/${resultData.sha256}/detection`,
+      url: `https://www.virustotal.com/gui/file/${sha256}/detection`,
     });
 
     // Update adaptiveWaitTime for the next upload
