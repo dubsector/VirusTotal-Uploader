@@ -101,7 +101,7 @@ document.addEventListener('DOMContentLoaded', function () {
   let countdownInterval = null;
 
   // Fetch the saved progress or waiting state when the popup opens
-  chrome.storage.local.get(['uploadInProgress', 'percentComplete', 'fileName', 'waitingForNextUpload', 'retryCount', 'waitTime'], (data) => {
+  chrome.storage.local.get(['uploadInProgress', 'percentComplete', 'fileName', 'waitingForNextUpload', 'retryCount', 'nextUploadTime', 'nextAttemptTime'], (data) => {
     // Only update UI after data retrieval
     if (data.uploadInProgress && data.percentComplete && data.fileName) {
       // Show upload progress
@@ -115,16 +115,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
       if (data.retryCount && data.retryCount > 0) {
         // Handle retry waiting state
-        let remainingTime = parseInt(data.waitTime, 10);
-        statusDiv.textContent = `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName} in ${remainingTime} seconds.`;
+        let scheduledTime = parseInt(data.nextAttemptTime, 10);
+        statusDiv.textContent = `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName} in ... seconds.`;
         progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
         progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
-        startCountdown(remainingTime, `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName}`);
+        startCountdown(scheduledTime, `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName}`);
       } else {
-        if (data.waitTime) {
-          let remainingTime = parseInt(data.waitTime, 10);
-          statusDiv.textContent = `Waiting to upload ${data.fileName} in ${remainingTime} seconds.`;
-          startCountdown(remainingTime, `Waiting to upload ${data.fileName}`);
+        if (data.nextUploadTime) {
+          let scheduledTime = parseInt(data.nextUploadTime, 10);
+          statusDiv.textContent = `Waiting to upload ${data.fileName} in ... seconds.`;
+          startCountdown(scheduledTime, `Waiting to upload ${data.fileName}`);
         } else {
           statusDiv.textContent = `Waiting to upload ${data.fileName}...`;
         }
@@ -146,9 +146,9 @@ document.addEventListener('DOMContentLoaded', function () {
       progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
       progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
 
-      let remainingTime = parseInt(message.waitTime, 10);
-      statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ${remainingTime} seconds.`;
-      startCountdown(remainingTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
+      let scheduledTime = parseInt(message.nextAttemptTime, 10);
+      statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ... seconds.`;
+      startCountdown(scheduledTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
     } else if (message.action === 'uploadProgress') {
       // Handle upload progress
       if (countdownInterval) {
@@ -165,9 +165,19 @@ document.addEventListener('DOMContentLoaded', function () {
       progressBar.style.width = '100%'; // Show the bar as full to indicate waiting
       progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
 
-      let remainingTime = parseInt(message.waitTime, 10);
-      statusDiv.textContent = `Waiting to upload ${message.fileName} in ${remainingTime} seconds.`;
-      startCountdown(remainingTime, `Waiting to upload ${message.fileName}`);
+      let scheduledTime = parseInt(message.nextUploadTime, 10);
+      statusDiv.textContent = `Waiting to upload ${message.fileName} in ... seconds.`;
+      startCountdown(scheduledTime, `Waiting to upload ${message.fileName}`);
+    } else if (message.action === 'uploadStarted') {
+      // Upload has started
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressBar.style.backgroundColor = ''; // Reset to default color
+      statusDiv.textContent = `Uploading ${message.fileName}... 0%`;
     } else if (message.action === 'uploadComplete') {
       // Handle upload completion
       if (countdownInterval) {
@@ -194,13 +204,19 @@ document.addEventListener('DOMContentLoaded', function () {
     port.disconnect();
   });
 
-  function startCountdown(remainingTime, statusPrefix) {
+  function startCountdown(scheduledTime, statusPrefix) {
     if (countdownInterval) {
       clearInterval(countdownInterval);
     }
 
+    // Update the status immediately
+    let remainingTimeMs = scheduledTime - Date.now();
+    let remainingTime = Math.ceil(remainingTimeMs / 1000);
+    statusDiv.textContent = `${statusPrefix} in ${remainingTime} seconds.`;
+
     countdownInterval = setInterval(() => {
-      remainingTime -= 1;
+      remainingTimeMs = scheduledTime - Date.now();
+      remainingTime = Math.ceil(remainingTimeMs / 1000);
       if (remainingTime <= 0) {
         clearInterval(countdownInterval);
         countdownInterval = null;

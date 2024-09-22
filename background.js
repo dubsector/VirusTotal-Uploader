@@ -199,22 +199,20 @@ async function handleWaitPeriod(
   fileData
 ) {
   const waitTimeMs = nextUploadTime - Date.now();
-  const waitTimeSeconds = Math.ceil(waitTimeMs / 1000); // Round up to nearest whole second
-
   console.log(
-    `[${new Date().toLocaleTimeString()}] Need to wait ${waitTimeSeconds} seconds before the next upload.`
+    `[${new Date().toLocaleTimeString()}] Need to wait ${Math.ceil(waitTimeMs / 1000)} seconds before the next upload.`
   );
 
   await setToStorageLocal({
     waitingForNextUpload: true,
-    waitTime: waitTimeSeconds, // Store as integer seconds
+    nextUploadTime,
   });
 
   if (popupPort) {
     popupPort.postMessage({
       action: 'waitingForNextUpload',
       fileName,
-      waitTime: waitTimeSeconds, // Send integer seconds to popup
+      nextUploadTime,
     });
   }
 
@@ -229,6 +227,14 @@ async function handleWaitPeriod(
 
 // Process the Actual Upload
 async function processUpload(fileName, fileSize, fileData, credentials, startTime) {
+  // Notify popup that upload has started
+  if (popupPort) {
+    popupPort.postMessage({
+      action: 'uploadStarted',
+      fileName,
+    });
+  }
+
   try {
     const apiKey = await decryptApiKey(credentials);
 
@@ -273,7 +279,7 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
       uploadDuration
     );
   } catch (error) {
-    await handleUploadError(error, fileName, fileSize, 0, startTime, fileData);
+    await handleUploadError(error, fileName, fileSize, 0, startTime, []);
   }
 }
 
@@ -445,16 +451,16 @@ async function handleUploadError(
     retryCount += 1;
     adaptiveWaitTime = Math.min(adaptiveWaitTime + 3000, MAX_WAIT_TIME);
     const retryDelayMs = adaptiveWaitTime;
-    const retryDelaySeconds = Math.ceil(retryDelayMs / 1000); // Round up to nearest whole second
+    const nextAttemptTime = Date.now() + retryDelayMs;
 
     await setToStorageLocal({
       adaptiveWaitTime,
       retryCount,
-      waitTime: retryDelaySeconds, // Store as integer seconds
+      nextAttemptTime,
     });
 
     console.log(
-      `[${new Date().toLocaleTimeString()}] Retrying upload (${retryCount}/${MAX_RETRIES}) for ${fileName} after ${retryDelaySeconds} seconds.`
+      `[${new Date().toLocaleTimeString()}] Retrying upload (${retryCount}/${MAX_RETRIES}) for ${fileName} after ${Math.ceil(retryDelayMs / 1000)} seconds.`
     );
 
     // Send the wait time to the popup
@@ -464,7 +470,7 @@ async function handleUploadError(
         retryCount,
         maxRetries: MAX_RETRIES,
         fileName,
-        waitTime: retryDelaySeconds, // Send integer seconds to popup
+        nextAttemptTime,
       });
     }
 
@@ -502,6 +508,8 @@ async function clearUploadState() {
     'retryCount',
     'adaptiveWaitTime',
     'waitTime',
+    'nextUploadTime',
+    'nextAttemptTime',
   ]);
 }
 
@@ -516,7 +524,8 @@ chrome.runtime.onConnect.addListener((port) => {
       'uploadInProgress',
       'waitingForNextUpload',
       'retryCount',
-      'waitTime',
+      'nextUploadTime',
+      'nextAttemptTime',
     ]).then((data) => {
       if (data.fileName && popupPort) {
         if (data.uploadInProgress && data.percentComplete) {
@@ -526,21 +535,21 @@ chrome.runtime.onConnect.addListener((port) => {
             fileName: data.fileName,
           });
         } else if (data.waitingForNextUpload) {
-          popupPort.postMessage({
-            action: 'waitingForNextUpload',
-            fileName: data.fileName,
-            waitTime: data.waitTime || '', // Send integer seconds
-          });
-        }
-
-        if (data.retryCount) {
-          popupPort.postMessage({
-            action: 'uploadRetry',
-            retryCount: data.retryCount,
-            maxRetries: MAX_RETRIES,
-            fileName: data.fileName,
-            waitTime: data.waitTime || '', // Send integer seconds
-          });
+          if (data.retryCount && data.nextAttemptTime) {
+            popupPort.postMessage({
+              action: 'uploadRetry',
+              retryCount: data.retryCount,
+              maxRetries: MAX_RETRIES,
+              fileName: data.fileName,
+              nextAttemptTime: data.nextAttemptTime,
+            });
+          } else if (data.nextUploadTime) {
+            popupPort.postMessage({
+              action: 'waitingForNextUpload',
+              fileName: data.fileName,
+              nextUploadTime: data.nextUploadTime,
+            });
+          }
         }
       }
     });
