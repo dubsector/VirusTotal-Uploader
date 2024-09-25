@@ -1,18 +1,10 @@
 // background.js
 
 // Constants and Configurations
-const MIN_WAIT_TIME = 15000; // Minimum 15 seconds between uploads
-const MAX_WAIT_TIME = 40000; // Maximum 40 seconds between uploads
 const MAX_FILE_SIZE_FREE = 32 * 1024 * 1024; // 32 MB for free accounts
 const MAX_FILE_SIZE_PREMIUM = 550 * 1024 * 1024; // 550 MB for premium accounts
 const AVERAGE_UPLOAD_SPEED = 950 * 1024; // 950 KB/s
 const MAX_RETRIES = 3; // Maximum number of retries
-
-// Adaptive wait time variable
-let adaptiveWaitTime = MIN_WAIT_TIME; // Default to minimum wait time
-
-// Initialize adaptiveWaitTime from storage
-initializeAdaptiveWaitTime();
 
 // Upload queue and state variables
 let uploadQueue = [];
@@ -67,42 +59,6 @@ function setToStorageSync(items) {
   });
 }
 
-// Initialize Adaptive Wait Time
-function initializeAdaptiveWaitTime() {
-  getFromStorageLocal(['adaptiveWaitTime'])
-    .then((data) => {
-      if (data.adaptiveWaitTime !== undefined) {
-        adaptiveWaitTime = data.adaptiveWaitTime;
-        console.log(
-          `[${new Date().toLocaleTimeString()}] Loaded adaptiveWaitTime from storage: ${adaptiveWaitTime} ms`
-        );
-      } else {
-        console.log(
-          `[${new Date().toLocaleTimeString()}] No stored adaptiveWaitTime found. Using default: ${adaptiveWaitTime} ms`
-        );
-      }
-    })
-    .catch((error) => {
-      console.error('Error retrieving adaptiveWaitTime from storage:', error);
-    });
-}
-
-// Calculate Wait Time Based on File Size
-function calculateWaitTime(fileSize, isPremium) {
-  const MAX_FILE_SIZE = isPremium ? MAX_FILE_SIZE_PREMIUM : MAX_FILE_SIZE_FREE;
-  const sizeRatio = Math.min(fileSize / MAX_FILE_SIZE, 1);
-  const exponent = 0.5; // Adjusting the curve with exponent
-  const waitTime =
-    MIN_WAIT_TIME +
-    (MAX_WAIT_TIME - MIN_WAIT_TIME) * Math.pow(1 - sizeRatio, exponent);
-  return Math.max(Math.min(waitTime, MAX_WAIT_TIME), MIN_WAIT_TIME); // Ensure within bounds
-}
-
-// Easing Function for Progress Simulation
-function easeOutQuad(t) {
-  return t * (2 - t);
-}
-
 // Handle Messages from Popup
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'queueFile') {
@@ -134,13 +90,12 @@ function processUploadQueue() {
 
   isUploading = true;
   const { fileName, fileSize, fileData } = uploadQueue.shift();
-  console.log(`[${new Date().toLocaleTimeString()}] Starting upload for: ${fileName}`);
+  console.log(`[${new Date().toLocaleTimeString()}] Starting processing for: ${fileName}`);
 
   // Initialize upload state
   chrome.storage.local.set({
     fileName,
     percentComplete: 0,
-    waitingForNextUpload: false,
     retryCount: 0,
     uploadInProgress: true,
   });
@@ -158,24 +113,8 @@ async function attemptUpload(fileName, fileSize, fileData, retryCount, startTime
       'apiKey',
       'iv',
       'encryptionKey',
-      'nextUploadTime',
       'premiumAccount',
     ]);
-
-    let currentTime = Date.now();
-
-    // Check for required wait time
-    if (result.nextUploadTime && currentTime < result.nextUploadTime) {
-      await handleWaitPeriod(
-        fileName,
-        result.nextUploadTime,
-        retryCount,
-        startTime,
-        fileSize,
-        fileData
-      );
-      return;
-    }
 
     // Check for necessary credentials
     if (!result.apiKey || !result.iv || !result.encryptionKey) {
@@ -189,48 +128,12 @@ async function attemptUpload(fileName, fileSize, fileData, retryCount, startTime
   }
 }
 
-// Handle Wait Period Before Next Upload
-async function handleWaitPeriod(
-  fileName,
-  nextUploadTime,
-  retryCount,
-  startTime,
-  fileSize,
-  fileData
-) {
-  const waitTimeMs = nextUploadTime - Date.now();
-  console.log(
-    `[${new Date().toLocaleTimeString()}] Need to wait ${Math.ceil(waitTimeMs / 1000)} seconds before the next upload.`
-  );
-
-  await setToStorageLocal({
-    waitingForNextUpload: true,
-    nextUploadTime,
-  });
-
-  if (popupPort) {
-    popupPort.postMessage({
-      action: 'waitingForNextUpload',
-      fileName,
-      nextUploadTime,
-    });
-  }
-
-  // Wait for the required time
-  setTimeout(() => {
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Wait period over. Resuming upload for ${fileName}.`
-    );
-    attemptUpload(fileName, fileSize, fileData, retryCount, startTime);
-  }, waitTimeMs);
-}
-
 // Process the Actual Upload
 async function processUpload(fileName, fileSize, fileData, credentials, startTime) {
-  // Notify popup that upload has started
+  // Notify popup that checking has started
   if (popupPort) {
     popupPort.postMessage({
-      action: 'uploadStarted',
+      action: 'checkingStarted',
       fileName,
     });
   }
@@ -243,50 +146,173 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
 
     const isPremium = credentials.premiumAccount || false;
 
-    adaptiveWaitTime = calculateWaitTime(fileSize, isPremium);
-    await setToStorageLocal({ adaptiveWaitTime });
+    const estimatedCheckDuration = 2000; // Estimated time for computing hash and checking (2 seconds)
 
     console.log(
-      `[${new Date().toLocaleTimeString()}] Calculated adaptiveWaitTime for ${fileName}: ${(
-        adaptiveWaitTime / 1000
+      `[${new Date().toLocaleTimeString()}] Estimated checking duration for ${fileName}: ${(
+        estimatedCheckDuration / 1000
       ).toFixed(2)} seconds`
     );
 
-    const estimatedUploadDuration = (fileSize / AVERAGE_UPLOAD_SPEED) * 1000;
+    await simulateProgress(fileName, estimatedCheckDuration, startTime, 'Checking');
 
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Estimated upload duration for ${fileName}: ${(
-        estimatedUploadDuration / 1000
-      ).toFixed(2)} seconds`
+    const checkStartTime = Date.now();
+
+    // Compute the SHA-256 hash of the file
+    const fileHash = await computeSHA256(arrayBuffer);
+
+    // Check if the file has already been analyzed
+    const existingAnalysis = await checkExistingAnalysis(fileHash, apiKey);
+
+    if (existingAnalysis) {
+      console.log(
+        `[${new Date().toLocaleTimeString()}] Existing analysis found for ${fileName}. Opening report.`
+      );
+      await handleExistingAnalysis(existingAnalysis, fileName, fileSize, startTime);
+    } else {
+      // Notify popup that upload is starting
+      if (popupPort) {
+        popupPort.postMessage({
+          action: 'uploadStarted',
+          fileName,
+        });
+      }
+
+      // Proceed to upload the file
+      const estimatedUploadDuration = (fileSize / AVERAGE_UPLOAD_SPEED) * 1000;
+
+      console.log(
+        `[${new Date().toLocaleTimeString()}] Estimated upload duration for ${fileName}: ${(
+          estimatedUploadDuration / 1000
+        ).toFixed(2)} seconds`
+      );
+
+      await simulateProgress(fileName, estimatedUploadDuration, startTime, 'Uploading');
+
+      await uploadFile(blob, fileName, fileSize, apiKey, startTime);
+    }
+  } catch (error) {
+    await handleUploadError(error, fileName, fileSize, 0, startTime, fileData);
+  }
+}
+
+// Compute SHA-256 Hash
+async function computeSHA256(arrayBuffer) {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
+// Check for Existing Analysis
+async function checkExistingAnalysis(fileHash, apiKey) {
+  const url = `https://www.virustotal.com/api/v3/files/${fileHash}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'x-apikey': apiKey,
+    },
+  });
+
+  if (response.status === 200) {
+    const resultData = await response.json();
+    return resultData;
+  } else if (response.status === 404) {
+    // File not found, proceed to upload
+    return null;
+  } else {
+    const responseText = await response.text();
+    console.error(
+      `[${new Date().toLocaleTimeString()}] Error checking existing analysis ${response.status}: ${responseText}`
     );
+    throw new Error(`Error ${response.status}: ${response.statusText}`);
+  }
+}
 
-    await simulateProgress(fileName, estimatedUploadDuration, startTime);
+// Handle Existing Analysis
+async function handleExistingAnalysis(resultData, fileName, fileSize, startTime) {
+  if (popupPort) {
+    popupPort.postMessage({
+      action: 'uploadProgress',
+      percentComplete: 100,
+      fileName,
+    });
+    // Optionally, send a message indicating completion
+    popupPort.postMessage({
+      action: 'uploadComplete',
+      fileName,
+    });
+  }
 
-    const uploadStartTimeFetch = Date.now();
+  await clearUploadState();
 
-    // **API v3 Upload Endpoint and Headers**
-    const response = await fetch('https://www.virustotal.com/api/v3/files', {
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(
+    `[${new Date().toLocaleTimeString()}] Retrieval complete for ${fileName}. Total time: ${totalTime} seconds.`
+  );
+
+  // Open the analysis URL
+  const fileId = resultData.data.id;
+  chrome.tabs.create({
+    url: `https://www.virustotal.com/gui/file/${fileId}/detection`,
+  });
+
+  // Proceed to the next file in the queue
+  isUploading = false;
+  processUploadQueue();
+}
+
+// Upload File
+async function uploadFile(blob, fileName, fileSize, apiKey, startTime) {
+  let response;
+  if (fileSize <= 32 * 1024 * 1024) {
+    // File size <=32MB, upload directly to /api/v3/files
+    const formData = new FormData();
+    formData.append('file', blob, fileName);
+
+    response = await fetch('https://www.virustotal.com/api/v3/files', {
       method: 'POST',
       headers: {
-        'x-apikey': apiKey, // API v3 uses x-apikey header for authentication
-        // Alternatively, you can use the Authorization header with Bearer token
-        // 'Authorization': `Bearer ${apiKey}`,
+        'x-apikey': apiKey,
       },
-      body: createFormData(blob, fileName),
+      body: formData,
+    });
+  } else {
+    // File size >32MB, get upload URL first
+    const uploadUrlResponse = await fetch('https://www.virustotal.com/api/v3/files/upload_url', {
+      method: 'GET',
+      headers: {
+        'x-apikey': apiKey,
+      },
     });
 
-    const uploadDuration = ((Date.now() - uploadStartTimeFetch) / 1000).toFixed(2);
+    if (!uploadUrlResponse.ok) {
+      const responseText = await uploadUrlResponse.text();
+      console.error(
+        `[${new Date().toLocaleTimeString()}] Error getting upload URL ${uploadUrlResponse.status}: ${responseText}`
+      );
+      throw new Error(`Error ${uploadUrlResponse.status}: ${uploadUrlResponse.statusText}`);
+    }
 
-    await handleUploadResponse(
-      response,
-      fileName,
-      fileSize,
-      startTime,
-      uploadDuration
-    );
-  } catch (error) {
-    await handleUploadError(error, fileName, fileSize, 0, startTime, []);
+    const uploadUrlData = await uploadUrlResponse.json();
+    const uploadUrl = uploadUrlData.data;
+
+    // Now upload the file to the uploadUrl
+    const formData = new FormData();
+    formData.append('file', blob, fileName);
+
+    response = await fetch(uploadUrl, {
+      method: 'POST',
+      body: formData,
+    });
   }
+
+  await handleUploadResponse(
+    response,
+    fileName,
+    fileSize,
+    startTime
+  );
 }
 
 // Decrypt the API Key
@@ -313,23 +339,17 @@ async function decryptApiKey(credentials) {
   }
 }
 
-// Create Form Data for Upload
-function createFormData(blob, fileName) {
-  const formData = new FormData();
-  formData.append('file', blob, fileName);
-  return formData;
-}
-
 // Simulate Progress Bar
-async function simulateProgress(fileName, estimatedUploadDuration, startTime) {
-  const uploadStartTime = Date.now();
+async function simulateProgress(fileName, estimatedDuration, startTime, actionType) {
+  const action = actionType === 'Checking' ? 'Checking' : 'Uploading';
+  const startTimeSimulate = Date.now();
 
   return new Promise((resolve) => {
     const progressInterval = setInterval(() => {
-      const elapsed = Date.now() - uploadStartTime;
-      const progress = Math.min(1, elapsed / estimatedUploadDuration);
+      const elapsed = Date.now() - startTimeSimulate;
+      const progress = Math.min(1, elapsed / estimatedDuration);
 
-      const simulatedPercent = easeOutQuad(progress) * 96; // Adjusted scaling to 96%
+      const simulatedPercent = progress * 96; // Adjusted scaling to 96%
 
       setToStorageLocal({ percentComplete: simulatedPercent.toFixed(2) });
 
@@ -338,6 +358,7 @@ async function simulateProgress(fileName, estimatedUploadDuration, startTime) {
           action: 'uploadProgress',
           percentComplete: simulatedPercent.toFixed(2),
           fileName,
+          actionType,
         });
       }
 
@@ -354,8 +375,7 @@ async function handleUploadResponse(
   response,
   fileName,
   fileSize,
-  startTime,
-  uploadDuration
+  startTime
 ) {
   try {
     if (!response.ok) {
@@ -365,15 +385,15 @@ async function handleUploadResponse(
       );
 
       if (
-        response.status === 429 || // Too Many Requests
-        response.status === 204 || // No Content (possible rate limit)
-        responseText.includes('Too many requests')
+        response.status === 429 ||
+        responseText.includes('Too Many Requests')
       ) {
         console.warn(
-          `[${new Date().toLocaleTimeString()}] Rate limit exceeded. Adjusting wait time.`
+          `[${new Date().toLocaleTimeString()}] Rate limit exceeded. Applying timeout before next attempt.`
         );
-        adaptiveWaitTime = Math.min(adaptiveWaitTime + 3000, MAX_WAIT_TIME);
-        await setToStorageLocal({ adaptiveWaitTime });
+        const retryDelayMs = 60000; // 1 minute delay
+        const nextAttemptTime = Date.now() + retryDelayMs;
+        await setToStorageSync({ nextUploadTime: nextAttemptTime });
       }
 
       throw new Error(`Error ${response.status}: ${response.statusText}`);
@@ -390,23 +410,16 @@ async function handleUploadResponse(
 
     const resultData = await response.json();
 
-    // **API v3 Response Handling**
-    // API v3 returns data in a different structure. Typically, it includes a 'data' object with 'id' and other metadata.
-    const fileId = resultData.data.id; // Unique identifier for the uploaded file
-    const sha256 = resultData.data.attributes.sha256; // SHA256 hash of the file
-
     if (popupPort) {
       popupPort.postMessage({
         action: 'uploadProgress',
         percentComplete: 100,
         fileName,
       });
-      // Send a message indicating upload completion with fileId and sha256
+      // Optionally, send a message indicating upload completion
       popupPort.postMessage({
         action: 'uploadComplete',
         fileName,
-        fileId,
-        sha256,
       });
     }
 
@@ -414,32 +427,14 @@ async function handleUploadResponse(
 
     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(
-      `[${new Date().toLocaleTimeString()}] Upload complete for ${fileName}. Total time (including wait): ${totalTime} seconds.`
-    );
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Upload duration for ${fileName}: ${uploadDuration} seconds.`
+      `[${new Date().toLocaleTimeString()}] Upload complete for ${fileName}. Total time: ${totalTime} seconds.`
     );
 
-    // **Update to Handle API v3 URLs**
-    // Using the SHA256 hash from the response to construct the URL for viewing the scan results.
+    // Open the analysis URL using the analysis ID
+    const analysisId = resultData.data.id;
     chrome.tabs.create({
-      url: `https://www.virustotal.com/gui/file/${sha256}/detection`,
+      url: `https://www.virustotal.com/gui/file-analysis/${analysisId}`,
     });
-
-    // Update adaptiveWaitTime for the next upload
-    const result = await getFromStorageSync(['premiumAccount']);
-    const isPremium = result.premiumAccount || false;
-    adaptiveWaitTime = calculateWaitTime(fileSize, isPremium);
-    await setToStorageLocal({ adaptiveWaitTime });
-
-    const nextUploadTime = Date.now() + adaptiveWaitTime;
-    console.log(
-      `[${new Date().toLocaleTimeString()}] Next upload allowed in ${(
-        adaptiveWaitTime / 1000
-      ).toFixed(2)} seconds.`
-    );
-
-    await setToStorageSync({ nextUploadTime });
 
     // Proceed to the next file in the queue
     isUploading = false;
@@ -464,12 +459,12 @@ async function handleUploadError(
 
   if (retryCount < MAX_RETRIES) {
     retryCount += 1;
-    adaptiveWaitTime = Math.min(adaptiveWaitTime + 3000, MAX_WAIT_TIME);
-    const retryDelayMs = adaptiveWaitTime;
+    const retryDelayMs = 60000; // 1 minute delay
     const nextAttemptTime = Date.now() + retryDelayMs;
 
+    await setToStorageSync({ nextUploadTime: nextAttemptTime });
+
     await setToStorageLocal({
-      adaptiveWaitTime,
       retryCount,
       nextAttemptTime,
     });
@@ -519,11 +514,7 @@ async function clearUploadState() {
     'percentComplete',
     'uploadInProgress',
     'fileName',
-    'waitingForNextUpload',
     'retryCount',
-    'adaptiveWaitTime',
-    'waitTime',
-    'nextUploadTime',
     'nextAttemptTime',
   ]);
 }
@@ -537,9 +528,7 @@ chrome.runtime.onConnect.addListener((port) => {
       'fileName',
       'percentComplete',
       'uploadInProgress',
-      'waitingForNextUpload',
       'retryCount',
-      'nextUploadTime',
       'nextAttemptTime',
     ]).then((data) => {
       if (data.fileName && popupPort) {
@@ -549,7 +538,7 @@ chrome.runtime.onConnect.addListener((port) => {
             percentComplete: data.percentComplete,
             fileName: data.fileName,
           });
-        } else if (data.waitingForNextUpload) {
+        } else if (data.nextAttemptTime) {
           if (data.retryCount && data.nextAttemptTime) {
             popupPort.postMessage({
               action: 'uploadRetry',
@@ -557,12 +546,6 @@ chrome.runtime.onConnect.addListener((port) => {
               maxRetries: MAX_RETRIES,
               fileName: data.fileName,
               nextAttemptTime: data.nextAttemptTime,
-            });
-          } else if (data.nextUploadTime) {
-            popupPort.postMessage({
-              action: 'waitingForNextUpload',
-              fileName: data.fileName,
-              nextUploadTime: data.nextUploadTime,
             });
           }
         }
