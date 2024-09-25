@@ -72,22 +72,20 @@ document.addEventListener('DOMContentLoaded', function () {
       // Reset file input
       fileInput.value = '';
 
-      // **Modification Start**
-      // Before resetting UI elements, check if there's an upload in progress or waiting
-      chrome.storage.local.get(['uploadInProgress', 'waitingForNextUpload'], (data) => {
-        if (!data.uploadInProgress && !data.waitingForNextUpload) {
-          // Show initial status if no upload is in progress or waiting
+      // Check if there's an upload in progress or waiting
+      chrome.storage.local.get(['uploadInProgress'], (data) => {
+        if (!data.uploadInProgress) {
+          // Show initial status if no upload is in progress
           progressContainer.style.display = 'block';
           progressBar.style.width = '0%';
           progressBar.style.display = 'block';  // Reset and show the progress bar
-          statusDiv.textContent = `Files queued for upload.`;
+          statusDiv.textContent = `Files queued for processing.`;
           progressBar.style.backgroundColor = ''; // Reset color to default
         } else {
-          // If an upload is in progress or waiting, do not reset the UI elements
-          statusDiv.textContent = `Files queued for upload. Current upload in progress.`;
+          // If an upload is in progress, do not reset the UI elements
+          statusDiv.textContent = `Files queued for processing. Current operation in progress.`;
         }
       });
-      // **Modification End**
     });
   });
 
@@ -101,38 +99,24 @@ document.addEventListener('DOMContentLoaded', function () {
   let countdownInterval = null;
 
   // Fetch the saved progress or waiting state when the popup opens
-  chrome.storage.local.get(['uploadInProgress', 'percentComplete', 'fileName', 'waitingForNextUpload', 'retryCount', 'nextUploadTime', 'nextAttemptTime'], (data) => {
+  chrome.storage.local.get(['uploadInProgress', 'percentComplete', 'fileName', 'retryCount', 'nextAttemptTime'], (data) => {
     // Only update UI after data retrieval
     if (data.uploadInProgress && data.percentComplete && data.fileName) {
-      // Show upload progress
+      // Show progress
       progressContainer.style.display = 'block';
       progressBar.style.width = `${data.percentComplete}%`;
-      statusDiv.textContent = `Uploading ${data.fileName}... ${data.percentComplete}%`;
+      statusDiv.textContent = `Processing ${data.fileName}... ${data.percentComplete}%`;
       progressBar.style.backgroundColor = ''; // Reset color to default
-    } else if (data.waitingForNextUpload && data.fileName) {
-      // Show waiting state
+    } else if (data.nextAttemptTime && data.fileName) {
+      // Show retry state
       progressContainer.style.display = 'block';
-
-      if (data.retryCount && data.retryCount > 0) {
-        // Handle retry waiting state
-        let scheduledTime = parseInt(data.nextAttemptTime, 10);
-        statusDiv.textContent = `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName} in ... seconds.`;
-        progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
-        progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
-        startCountdown(scheduledTime, `Retry ${data.retryCount} of ${maxRetries} for ${data.fileName}`);
-      } else {
-        if (data.nextUploadTime) {
-          let scheduledTime = parseInt(data.nextUploadTime, 10);
-          statusDiv.textContent = `Waiting to upload ${data.fileName} in ... seconds.`;
-          startCountdown(scheduledTime, `Waiting to upload ${data.fileName}`);
-        } else {
-          statusDiv.textContent = `Waiting to upload ${data.fileName}...`;
-        }
-        progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
-        progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
-      }
+      let scheduledTime = parseInt(data.nextAttemptTime, 10);
+      statusDiv.textContent = `Retrying ${data.fileName} in ... seconds.`;
+      progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
+      progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
+      startCountdown(scheduledTime, `Retrying ${data.fileName}`);
     } else {
-      // No ongoing upload
+      // No ongoing operation
       progressContainer.style.display = 'none';
       statusDiv.textContent = '';
     }
@@ -150,26 +134,18 @@ document.addEventListener('DOMContentLoaded', function () {
       statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ... seconds.`;
       startCountdown(scheduledTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
     } else if (message.action === 'uploadProgress') {
-      // Handle upload progress
+      // Handle progress
       if (countdownInterval) {
         clearInterval(countdownInterval);
         countdownInterval = null;
       }
       progressContainer.style.display = 'block';
       progressBar.style.width = `${message.percentComplete}%`;
-      statusDiv.textContent = `Uploading ${message.fileName}... ${message.percentComplete}%`;
-      progressBar.style.backgroundColor = ''; // Reset to default color during actual upload
-    } else if (message.action === 'waitingForNextUpload') {
-      // Handle waiting state
-      progressContainer.style.display = 'block';
-      progressBar.style.width = '100%'; // Show the bar as full to indicate waiting
-      progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
-
-      let scheduledTime = parseInt(message.nextUploadTime, 10);
-      statusDiv.textContent = `Waiting to upload ${message.fileName} in ... seconds.`;
-      startCountdown(scheduledTime, `Waiting to upload ${message.fileName}`);
-    } else if (message.action === 'uploadStarted') {
-      // Upload has started
+      let actionType = message.actionType || 'Processing';
+      statusDiv.textContent = `${actionType} ${message.fileName}... ${message.percentComplete}%`;
+      progressBar.style.backgroundColor = ''; // Reset to default color during actual processing
+    } else if (message.action === 'uploadStarted' || message.action === 'checkingStarted') {
+      // Operation has started
       if (countdownInterval) {
         clearInterval(countdownInterval);
         countdownInterval = null;
@@ -177,22 +153,23 @@ document.addEventListener('DOMContentLoaded', function () {
       progressContainer.style.display = 'block';
       progressBar.style.width = '0%';
       progressBar.style.backgroundColor = ''; // Reset to default color
-      statusDiv.textContent = `Uploading ${message.fileName}... 0%`;
+      let actionType = message.action === 'checkingStarted' ? 'Checking' : 'Uploading';
+      statusDiv.textContent = `${actionType} ${message.fileName}... 0%`;
     } else if (message.action === 'uploadComplete') {
-      // Handle upload completion
+      // Handle completion
       if (countdownInterval) {
         clearInterval(countdownInterval);
         countdownInterval = null;
       }
-      statusDiv.textContent = `Upload complete for ${message.fileName} (100%)`;
+      statusDiv.textContent = `Completed for ${message.fileName} (100%)`;
       progressBar.style.display = 'none';
     } else if (message.action === 'uploadError') {
-      // Handle upload error
+      // Handle error
       if (countdownInterval) {
         clearInterval(countdownInterval);
         countdownInterval = null;
       }
-      errorDiv.textContent = `Upload failed: ${message.error}`;
+      errorDiv.textContent = `Operation failed: ${message.error}`;
       progressBar.style.display = 'none';
     }
   });
@@ -220,7 +197,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (remainingTime <= 0) {
         clearInterval(countdownInterval);
         countdownInterval = null;
-        statusDiv.textContent = `Uploading...`;
+        statusDiv.textContent = `Processing...`;
         progressBar.style.backgroundColor = ''; // Reset to default color
       } else {
         statusDiv.textContent = `${statusPrefix} in ${remainingTime} seconds.`;
