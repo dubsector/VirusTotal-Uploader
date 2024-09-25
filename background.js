@@ -13,6 +13,93 @@ let isUploading = false;
 // Persistent connection to the popup
 let popupPort = null;
 
+// Global request tracking variables for rate limiting
+const requestTimestamps = [];
+
+// Helper Functions for Rate Limiting
+function canMakeRequest() {
+  const now = Date.now();
+  // Remove timestamps older than 60,000 ms (1 minute)
+  while (requestTimestamps.length > 0 && now - requestTimestamps[0] >= 60000) {
+    requestTimestamps.shift();
+  }
+  return requestTimestamps.length < 4;
+}
+
+function getNextAvailableRequestTime() {
+  const now = Date.now();
+  const oldestTimestamp = requestTimestamps[0];
+  const timeUntilNextRequest = 60000 - (now - oldestTimestamp);
+  return timeUntilNextRequest > 0 ? timeUntilNextRequest : 0;
+}
+
+async function makeApiRequest(url, options, fileName) {
+  // First, check if we can make the request now
+  if (canMakeRequest()) {
+    // Proceed with the request
+    requestTimestamps.push(Date.now());
+    const response = await fetch(url, options);
+    if (response.status === 429) {
+      // Handle rate limit exceeded
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Received 429 Too Many Requests for ${url}`
+      );
+      // Remove the timestamp we just added
+      requestTimestamps.pop();
+      // Get Retry-After header, if present
+      let retryAfter = response.headers.get('Retry-After');
+      let retryDelayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 60000;
+      const nextAttemptTime = Date.now() + retryDelayMs;
+      // Update storage with nextAttemptTime if needed
+      await setToStorageLocal({ nextAttemptTime });
+      // Notify popup about the delay
+      if (popupPort) {
+        popupPort.postMessage({
+          action: 'uploadRetry',
+          retryCount: 0,
+          maxRetries: MAX_RETRIES,
+          fileName,
+          nextAttemptTime,
+        });
+      }
+      console.log(
+        `[${new Date().toLocaleTimeString()}] Waiting ${Math.ceil(
+          retryDelayMs / 1000
+        )} seconds before retrying request to ${url}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      // After waiting, retry
+      return await makeApiRequest(url, options, fileName);
+    } else {
+      return response;
+    }
+  } else {
+    // Need to wait
+    const delayMs = getNextAvailableRequestTime();
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Rate limit reached. Waiting ${Math.ceil(
+        delayMs / 1000
+      )} seconds before making request to ${url}`
+    );
+    // Update storage with nextAttemptTime if needed
+    const nextAttemptTime = Date.now() + delayMs;
+    await setToStorageLocal({ nextAttemptTime });
+    // Notify popup about the delay
+    if (popupPort) {
+      popupPort.postMessage({
+        action: 'uploadRetry',
+        retryCount: 0,
+        maxRetries: MAX_RETRIES,
+        fileName,
+        nextAttemptTime,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    // After waiting, retry
+    return await makeApiRequest(url, options, fileName);
+  }
+}
+
 // Helper Functions for Chrome Storage with Promises
 function getFromStorageSync(keys) {
   return new Promise((resolve, reject) => {
@@ -162,7 +249,7 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
     const fileHash = await computeSHA256(arrayBuffer);
 
     // Check if the file has already been analyzed
-    const existingAnalysis = await checkExistingAnalysis(fileHash, apiKey);
+    const existingAnalysis = await checkExistingAnalysis(fileHash, apiKey, fileName);
 
     if (existingAnalysis) {
       console.log(
@@ -205,14 +292,15 @@ async function computeSHA256(arrayBuffer) {
 }
 
 // Check for Existing Analysis
-async function checkExistingAnalysis(fileHash, apiKey) {
+async function checkExistingAnalysis(fileHash, apiKey, fileName) {
   const url = `https://www.virustotal.com/api/v3/files/${fileHash}`;
-  const response = await fetch(url, {
+  const options = {
     method: 'GET',
     headers: {
       'x-apikey': apiKey,
     },
-  });
+  };
+  const response = await makeApiRequest(url, options, fileName);
 
   if (response.status === 200) {
     const resultData = await response.json();
@@ -270,21 +358,29 @@ async function uploadFile(blob, fileName, fileSize, apiKey, startTime) {
     const formData = new FormData();
     formData.append('file', blob, fileName);
 
-    response = await fetch('https://www.virustotal.com/api/v3/files', {
-      method: 'POST',
-      headers: {
-        'x-apikey': apiKey,
+    response = await makeApiRequest(
+      'https://www.virustotal.com/api/v3/files',
+      {
+        method: 'POST',
+        headers: {
+          'x-apikey': apiKey,
+        },
+        body: formData,
       },
-      body: formData,
-    });
+      fileName
+    );
   } else {
     // File size >32MB, get upload URL first
-    const uploadUrlResponse = await fetch('https://www.virustotal.com/api/v3/files/upload_url', {
-      method: 'GET',
-      headers: {
-        'x-apikey': apiKey,
+    const uploadUrlResponse = await makeApiRequest(
+      'https://www.virustotal.com/api/v3/files/upload_url',
+      {
+        method: 'GET',
+        headers: {
+          'x-apikey': apiKey,
+        },
       },
-    });
+      fileName
+    );
 
     if (!uploadUrlResponse.ok) {
       const responseText = await uploadUrlResponse.text();
@@ -301,18 +397,17 @@ async function uploadFile(blob, fileName, fileSize, apiKey, startTime) {
     const formData = new FormData();
     formData.append('file', blob, fileName);
 
-    response = await fetch(uploadUrl, {
-      method: 'POST',
-      body: formData,
-    });
+    response = await makeApiRequest(
+      uploadUrl,
+      {
+        method: 'POST',
+        body: formData,
+      },
+      fileName
+    );
   }
 
-  await handleUploadResponse(
-    response,
-    fileName,
-    fileSize,
-    startTime
-  );
+  await handleUploadResponse(response, fileName, fileSize, startTime);
 }
 
 // Decrypt the API Key
@@ -341,7 +436,6 @@ async function decryptApiKey(credentials) {
 
 // Simulate Progress Bar
 async function simulateProgress(fileName, estimatedDuration, startTime, actionType) {
-  const action = actionType === 'Checking' ? 'Checking' : 'Uploading';
   const startTimeSimulate = Date.now();
 
   return new Promise((resolve) => {
@@ -371,30 +465,13 @@ async function simulateProgress(fileName, estimatedDuration, startTime, actionTy
 }
 
 // Handle Upload Response
-async function handleUploadResponse(
-  response,
-  fileName,
-  fileSize,
-  startTime
-) {
+async function handleUploadResponse(response, fileName, fileSize, startTime) {
   try {
     if (!response.ok) {
       const responseText = await response.text();
       console.error(
         `[${new Date().toLocaleTimeString()}] Error ${response.status}: ${responseText}`
       );
-
-      if (
-        response.status === 429 ||
-        responseText.includes('Too Many Requests')
-      ) {
-        console.warn(
-          `[${new Date().toLocaleTimeString()}] Rate limit exceeded. Applying timeout before next attempt.`
-        );
-        const retryDelayMs = 60000; // 1 minute delay
-        const nextAttemptTime = Date.now() + retryDelayMs;
-        await setToStorageSync({ nextUploadTime: nextAttemptTime });
-      }
 
       throw new Error(`Error ${response.status}: ${response.statusText}`);
     }
@@ -462,15 +539,15 @@ async function handleUploadError(
     const retryDelayMs = 60000; // 1 minute delay
     const nextAttemptTime = Date.now() + retryDelayMs;
 
-    await setToStorageSync({ nextUploadTime: nextAttemptTime });
-
     await setToStorageLocal({
       retryCount,
       nextAttemptTime,
     });
 
     console.log(
-      `[${new Date().toLocaleTimeString()}] Retrying upload (${retryCount}/${MAX_RETRIES}) for ${fileName} after ${Math.ceil(retryDelayMs / 1000)} seconds.`
+      `[${new Date().toLocaleTimeString()}] Retrying upload (${retryCount}/${MAX_RETRIES}) for ${fileName} after ${Math.ceil(
+        retryDelayMs / 1000
+      )} seconds.`
     );
 
     // Send the wait time to the popup
