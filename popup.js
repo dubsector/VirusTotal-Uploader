@@ -1,6 +1,9 @@
 // popup.js
 
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', async function () {
+  // Initialize IndexedDB
+  await initializeIndexedDB();
+
   const fileInput = document.getElementById('fileInput');
   const statusDiv = document.getElementById('status');
   const errorDiv = document.getElementById('error');
@@ -59,12 +62,21 @@ document.addEventListener('DOMContentLoaded', function () {
         const reader = new FileReader();
         reader.onload = function(event) {
           const arrayBuffer = event.target.result;
-          chrome.runtime.sendMessage({
-            action: 'queueFile',
-            fileName: file.name,
-            fileSize: file.size,
-            fileData: Array.from(new Uint8Array(arrayBuffer))
-          });
+
+          // Save file data into IndexedDB
+          saveFileDataToIndexedDB(file.name, Array.from(new Uint8Array(arrayBuffer)))
+            .then(() => {
+              // Send message to background script to queue the file
+              chrome.runtime.sendMessage({
+                action: 'queueFile',
+                fileName: file.name,
+                fileSize: file.size
+              });
+            })
+            .catch(error => {
+              console.error('Failed to save file data to IndexedDB:', error);
+              errorDiv.textContent = 'Failed to save file data.';
+            });
         };
         reader.readAsArrayBuffer(file);
       });
@@ -73,16 +85,16 @@ document.addEventListener('DOMContentLoaded', function () {
       fileInput.value = '';
 
       // Check if there's an upload in progress or waiting
-      chrome.storage.local.get(['uploadInProgress'], (data) => {
-        if (!data.uploadInProgress) {
-          // Show initial status if no upload is in progress
+      chrome.storage.local.get(['uploadInProgress', 'nextAttemptTime'], (data) => {
+        if (!data.uploadInProgress && !data.nextAttemptTime) {
+          // Show initial status if no upload is in progress or waiting
           progressContainer.style.display = 'block';
           progressBar.style.width = '0%';
           progressBar.style.display = 'block';  // Reset and show the progress bar
           statusDiv.textContent = 'Files queued for processing.';
           progressBar.style.backgroundColor = ''; // Reset color to default
         } else {
-          // If an upload is in progress, do not reset the UI elements
+          // If an upload is in progress or waiting, do not reset the UI elements
           statusDiv.textContent = 'Files queued for processing. Current operation in progress.';
         }
       });
@@ -212,5 +224,46 @@ document.addEventListener('DOMContentLoaded', function () {
         statusDiv.textContent = `${statusPrefix} in ${remainingTime} seconds.`;
       }
     }, 1000);
+  }
+
+  // Function to save file data to IndexedDB
+  function saveFileDataToIndexedDB(fileName, fileData) {
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['files'], 'readwrite');
+      const objectStore = transaction.objectStore('files');
+      const request = objectStore.put({ fileName, fileData });
+
+      request.onsuccess = function () {
+        resolve();
+      };
+
+      request.onerror = function (event) {
+        reject(event.target.error);
+      };
+    });
+  }
+
+  // Initialize IndexedDB
+  function initializeIndexedDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('VirusTotalUploaderDB', 1);
+
+      request.onupgradeneeded = function (event) {
+        db = event.target.result;
+        // Create an object store for files with auto-incrementing keys
+        const objectStore = db.createObjectStore('files', { keyPath: 'fileName' });
+        objectStore.createIndex('fileName', 'fileName', { unique: true });
+      };
+
+      request.onsuccess = function (event) {
+        db = event.target.result;
+        resolve();
+      };
+
+      request.onerror = function (event) {
+        console.error('IndexedDB error:', event.target.errorCode);
+        reject(event.target.errorCode);
+      };
+    });
   }
 });
