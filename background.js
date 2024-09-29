@@ -16,6 +16,91 @@ let popupPort = null;
 // Global request tracking variables for rate limiting
 const requestTimestamps = [];
 
+// Custom Error Class for Rate Limit Errors
+class RateLimitError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}
+
+// IndexedDB setup
+let db;
+initializeIndexedDB();
+
+// Initialize IndexedDB
+function initializeIndexedDB() {
+  const request = indexedDB.open('VirusTotalUploaderDB', 1);
+
+  request.onupgradeneeded = function (event) {
+    db = event.target.result;
+    // Create an object store for files with auto-incrementing keys
+    const objectStore = db.createObjectStore('files', { keyPath: 'fileName' });
+    objectStore.createIndex('fileName', 'fileName', { unique: true });
+  };
+
+  request.onsuccess = function (event) {
+    db = event.target.result;
+  };
+
+  request.onerror = function (event) {
+    console.error('IndexedDB error:', event.target.errorCode);
+  };
+}
+
+// Helper Functions for IndexedDB
+function saveFileDataToIndexedDB(fileName, fileData) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(['files'], 'readwrite');
+    const objectStore = transaction.objectStore('files');
+    const request = objectStore.put({ fileName, fileData });
+
+    request.onsuccess = function () {
+      resolve();
+    };
+
+    request.onerror = function (event) {
+      reject(event.target.error);
+    };
+  });
+}
+
+function getFileDataFromIndexedDB(fileName) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(['files'], 'readonly');
+    const objectStore = transaction.objectStore('files');
+    const request = objectStore.get(fileName);
+
+    request.onsuccess = function (event) {
+      if (event.target.result) {
+        resolve(event.target.result.fileData);
+      } else {
+        resolve(null);
+      }
+    };
+
+    request.onerror = function (event) {
+      reject(event.target.error);
+    };
+  });
+}
+
+function removeFileDataFromIndexedDB(fileName) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(['files'], 'readwrite');
+    const objectStore = transaction.objectStore('files');
+    const request = objectStore.delete(fileName);
+
+    request.onsuccess = function () {
+      resolve();
+    };
+
+    request.onerror = function (event) {
+      reject(event.target.error);
+    };
+  });
+}
+
 // Helper Functions for Rate Limiting
 function canMakeRequest() {
   const now = Date.now();
@@ -53,23 +138,16 @@ async function makeApiRequest(url, options, fileName) {
       // Update storage with nextAttemptTime if needed
       await setToStorageLocal({ nextAttemptTime });
       // Notify popup about the delay
-      if (popupPort) {
-        popupPort.postMessage({
-          action: 'uploadRetry',
-          retryCount: 0,
-          maxRetries: MAX_RETRIES,
-          fileName,
-          nextAttemptTime,
-        });
-      }
+      notifyPopupAboutDelay(0, fileName, nextAttemptTime);
       console.log(
         `[${new Date().toLocaleTimeString()}] Waiting ${Math.ceil(
           retryDelayMs / 1000
         )} seconds before retrying request to ${url}`
       );
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      // After waiting, retry
-      return await makeApiRequest(url, options, fileName);
+      // Schedule an alarm to retry after the delay
+      scheduleRetryAlarm(retryDelayMs);
+      // Throw a RateLimitError to stop the current attempt
+      throw new RateLimitError('Rate limit exceeded');
     } else {
       return response;
     }
@@ -85,20 +163,65 @@ async function makeApiRequest(url, options, fileName) {
     const nextAttemptTime = Date.now() + delayMs;
     await setToStorageLocal({ nextAttemptTime });
     // Notify popup about the delay
-    if (popupPort) {
-      popupPort.postMessage({
-        action: 'uploadRetry',
-        retryCount: 0,
-        maxRetries: MAX_RETRIES,
-        fileName,
-        nextAttemptTime,
-      });
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-    // After waiting, retry
-    return await makeApiRequest(url, options, fileName);
+    notifyPopupAboutDelay(0, fileName, nextAttemptTime);
+    // Schedule an alarm to retry after the delay
+    scheduleRetryAlarm(delayMs);
+    // Throw a RateLimitError to stop the current attempt
+    throw new RateLimitError('Rate limit reached');
   }
 }
+
+// Helper function to notify popup about delays
+function notifyPopupAboutDelay(retryCount, fileName, nextAttemptTime) {
+  if (popupPort) {
+    popupPort.postMessage({
+      action: 'uploadRetry',
+      retryCount,
+      maxRetries: MAX_RETRIES,
+      fileName,
+      nextAttemptTime,
+    });
+  }
+}
+
+// Schedule a retry using chrome.alarms API
+function scheduleRetryAlarm(delayMs) {
+  chrome.alarms.create('retryAlarm', { when: Date.now() + delayMs });
+}
+
+// Listen for the alarm event to retry the upload
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'retryAlarm') {
+    // Retrieve necessary state from storage
+    chrome.storage.local.get(
+      ['fileName', 'fileSize', 'retryCount', 'startTime'],
+      async (data) => {
+        if (data.fileName && data.fileSize) {
+          // Get fileData from IndexedDB
+          const fileData = await getFileDataFromIndexedDB(data.fileName);
+          if (fileData) {
+            // Retry the upload
+            attemptUpload(
+              data.fileName,
+              data.fileSize,
+              fileData,
+              data.retryCount || 0,
+              data.startTime || Date.now()
+            );
+          } else {
+            console.error('Missing file data for retrying upload.');
+            // Clear upload state
+            clearUploadState();
+          }
+        } else {
+          console.error('Missing data for retrying upload.');
+          // Clear upload state
+          clearUploadState();
+        }
+      }
+    );
+  }
+});
 
 // Helper Functions for Chrome Storage with Promises
 function getFromStorageSync(keys) {
@@ -153,10 +276,16 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-// Queue File for Upload
+// Modified Queue File for Upload Function
 function queueFileForUpload(fileName, fileSize, fileData) {
   uploadQueue.push({ fileName, fileSize, fileData });
-  console.log(`[${new Date().toLocaleTimeString()}] Queued file: ${fileName}`);
+  if (isUploading) {
+    console.log(
+      `[${new Date().toLocaleTimeString()}] Queued file: ${fileName}. Check in progress.`
+    );
+  } else {
+    console.log(`[${new Date().toLocaleTimeString()}] Queued file: ${fileName}`);
+  }
 
   // Start processing the queue
   processUploadQueue();
@@ -165,7 +294,7 @@ function queueFileForUpload(fileName, fileSize, fileData) {
 // Process Upload Queue
 function processUploadQueue() {
   if (isUploading) {
-    console.log(`[${new Date().toLocaleTimeString()}] Upload already in progress.`);
+    // No need to log redundant message
     return;
   }
 
@@ -179,18 +308,30 @@ function processUploadQueue() {
   const { fileName, fileSize, fileData } = uploadQueue.shift();
   console.log(`[${new Date().toLocaleTimeString()}] Starting processing for: ${fileName}`);
 
-  // Initialize upload state
-  chrome.storage.local.set({
+  const startTime = Date.now(); // Record the start time
+
+  // Save state to storage
+  setToStorageLocal({
     fileName,
+    fileSize,
+    startTime,
     percentComplete: 0,
     retryCount: 0,
     uploadInProgress: true,
   });
 
-  const startTime = Date.now(); // Record the start time
-
-  // Begin upload attempt
-  attemptUpload(fileName, fileSize, fileData, 0, startTime);
+  // Save fileData to IndexedDB
+  saveFileDataToIndexedDB(fileName, fileData)
+    .then(() => {
+      // Begin upload attempt
+      attemptUpload(fileName, fileSize, fileData, 0, startTime);
+    })
+    .catch((error) => {
+      console.error('Failed to save file data to IndexedDB:', error);
+      clearUploadState();
+      isUploading = false;
+      processUploadQueue();
+    });
 }
 
 // Attempt Upload with Retry Logic
@@ -211,11 +352,12 @@ async function attemptUpload(fileName, fileSize, fileData, retryCount, startTime
     // Proceed with upload
     await processUpload(fileName, fileSize, fileData, result, startTime);
   } catch (error) {
-    await handleUploadError(error, fileName, fileSize, retryCount, startTime, fileData);
+    // For errors other than RateLimitError, handle them
+    await handleUploadError(error, fileName, fileSize, retryCount, startTime);
   }
 }
 
-// Process the Actual Upload
+// Modified Process Upload Function
 async function processUpload(fileName, fileSize, fileData, credentials, startTime) {
   // Notify popup that checking has started
   if (popupPort) {
@@ -255,7 +397,13 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
       console.log(
         `[${new Date().toLocaleTimeString()}] Existing analysis found for ${fileName}. Opening report.`
       );
-      await handleExistingAnalysis(existingAnalysis, fileName, fileSize, startTime);
+      await handleExistingAnalysis(
+        existingAnalysis,
+        fileName,
+        fileSize,
+        startTime,
+        fileHash
+      ); // Pass fileHash
     } else {
       // Notify popup that upload is starting
       if (popupPort) {
@@ -276,10 +424,19 @@ async function processUpload(fileName, fileSize, fileData, credentials, startTim
 
       await simulateProgress(fileName, estimatedUploadDuration, startTime, 'Uploading');
 
-      await uploadFile(blob, fileName, fileSize, apiKey, startTime);
+      await uploadFile(blob, fileName, fileSize, apiKey, startTime, fileHash); // Pass fileHash
     }
   } catch (error) {
-    await handleUploadError(error, fileName, fileSize, 0, startTime, fileData);
+    if (error instanceof RateLimitError) {
+      // Handle RateLimitError without logging stack trace
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Upload paused for ${fileName} due to rate limiting: ${error.message}`
+      );
+      // No further action needed; retry is already scheduled
+    } else {
+      // For other errors, handle them
+      await handleUploadError(error, fileName, fileSize, 0, startTime);
+    }
   }
 }
 
@@ -317,8 +474,14 @@ async function checkExistingAnalysis(fileHash, apiKey, fileName) {
   }
 }
 
-// Handle Existing Analysis
-async function handleExistingAnalysis(resultData, fileName, fileSize, startTime) {
+// Modified Handle Existing Analysis Function
+async function handleExistingAnalysis(
+  resultData,
+  fileName,
+  fileSize,
+  startTime,
+  fileHash
+) {
   if (popupPort) {
     popupPort.postMessage({
       action: 'uploadProgress',
@@ -338,6 +501,8 @@ async function handleExistingAnalysis(resultData, fileName, fileSize, startTime)
   console.log(
     `[${new Date().toLocaleTimeString()}] Retrieval complete for ${fileName}. Total time: ${totalTime} seconds.`
   );
+  // Log the SHA-256 hash
+  console.log(`[${new Date().toLocaleTimeString()}] SHA-256 hash for ${fileName}: ${fileHash}`);
 
   // Open the analysis URL
   const fileId = resultData.data.id;
@@ -350,8 +515,8 @@ async function handleExistingAnalysis(resultData, fileName, fileSize, startTime)
   processUploadQueue();
 }
 
-// Upload File
-async function uploadFile(blob, fileName, fileSize, apiKey, startTime) {
+// Modified Upload File Function
+async function uploadFile(blob, fileName, fileSize, apiKey, startTime, fileHash) {
   let response;
   if (fileSize <= 32 * 1024 * 1024) {
     // File size <=32MB, upload directly to /api/v3/files
@@ -407,7 +572,7 @@ async function uploadFile(blob, fileName, fileSize, apiKey, startTime) {
     );
   }
 
-  await handleUploadResponse(response, fileName, fileSize, startTime);
+  await handleUploadResponse(response, fileName, fileSize, startTime, fileHash); // Pass fileHash
 }
 
 // Decrypt the API Key
@@ -464,8 +629,8 @@ async function simulateProgress(fileName, estimatedDuration, startTime, actionTy
   });
 }
 
-// Handle Upload Response
-async function handleUploadResponse(response, fileName, fileSize, startTime) {
+// Modified Handle Upload Response Function
+async function handleUploadResponse(response, fileName, fileSize, startTime, fileHash) {
   try {
     if (!response.ok) {
       const responseText = await response.text();
@@ -506,6 +671,8 @@ async function handleUploadResponse(response, fileName, fileSize, startTime) {
     console.log(
       `[${new Date().toLocaleTimeString()}] Upload complete for ${fileName}. Total time: ${totalTime} seconds.`
     );
+    // Log the SHA-256 hash
+    console.log(`[${new Date().toLocaleTimeString()}] SHA-256 hash for ${fileName}: ${fileHash}`);
 
     // Open the analysis URL using the analysis ID
     const analysisId = resultData.data.id;
@@ -517,7 +684,7 @@ async function handleUploadResponse(response, fileName, fileSize, startTime) {
     isUploading = false;
     processUploadQueue();
   } catch (error) {
-    await handleUploadError(error, fileName, fileSize, 0, startTime, []);
+    await handleUploadError(error, fileName, fileSize, 0, startTime);
   }
 }
 
@@ -527,12 +694,20 @@ async function handleUploadError(
   fileName,
   fileSize,
   retryCount,
-  startTime,
-  fileData
+  startTime
 ) {
-  console.error(
-    `[${new Date().toLocaleTimeString()}] Upload failed for ${fileName}: ${error.message}`
-  );
+  if (error instanceof RateLimitError) {
+    // Rate limit error encountered
+    console.warn(
+      `[${new Date().toLocaleTimeString()}] Upload paused for ${fileName} due to rate limiting: ${error.message}`
+    );
+    // No further action needed; retry is already scheduled
+    return;
+  } else {
+    console.error(
+      `[${new Date().toLocaleTimeString()}] Upload failed for ${fileName}: ${error.message}`
+    );
+  }
 
   if (retryCount < MAX_RETRIES) {
     retryCount += 1;
@@ -542,6 +717,9 @@ async function handleUploadError(
     await setToStorageLocal({
       retryCount,
       nextAttemptTime,
+      fileName,
+      fileSize,
+      startTime,
     });
 
     console.log(
@@ -551,20 +729,10 @@ async function handleUploadError(
     );
 
     // Send the wait time to the popup
-    if (popupPort) {
-      popupPort.postMessage({
-        action: 'uploadRetry',
-        retryCount,
-        maxRetries: MAX_RETRIES,
-        fileName,
-        nextAttemptTime,
-      });
-    }
+    notifyPopupAboutDelay(retryCount, fileName, nextAttemptTime);
 
-    // Wait before retrying
-    setTimeout(() => {
-      attemptUpload(fileName, fileSize, fileData, retryCount, startTime);
-    }, retryDelayMs);
+    // Schedule an alarm to retry after the delay
+    scheduleRetryAlarm(retryDelayMs);
   } else {
     console.error(
       `[${new Date().toLocaleTimeString()}] Max retries reached for ${fileName}. Skipping to next file.`
@@ -587,12 +755,19 @@ async function handleUploadError(
 
 // Clear Upload State After Completion or Failure
 async function clearUploadState() {
+  const data = await getFromStorageLocal(['fileName']);
+  if (data.fileName) {
+    await removeFileDataFromIndexedDB(data.fileName);
+  }
+
   await removeFromStorageLocal([
     'percentComplete',
     'uploadInProgress',
     'fileName',
+    'fileSize',
     'retryCount',
     'nextAttemptTime',
+    'startTime',
   ]);
 }
 
@@ -616,7 +791,7 @@ chrome.runtime.onConnect.addListener((port) => {
             fileName: data.fileName,
           });
         } else if (data.nextAttemptTime) {
-          if (data.retryCount && data.nextAttemptTime) {
+          if (data.retryCount !== undefined && data.nextAttemptTime) {
             popupPort.postMessage({
               action: 'uploadRetry',
               retryCount: data.retryCount,

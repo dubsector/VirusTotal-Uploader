@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       if (oversizedFiles.length > 0) {
         const limitMB = premiumAccount ? '550MB' : '32MB';
-        errorDiv.innerHTML = `Some files exceed the ${limitMB} limit and will not be uploaded.`;
+        errorDiv.textContent = `Some files exceed the ${limitMB} limit and will not be uploaded.`;
       }
 
       if (validFiles.length === 0) {
@@ -79,11 +79,11 @@ document.addEventListener('DOMContentLoaded', function () {
           progressContainer.style.display = 'block';
           progressBar.style.width = '0%';
           progressBar.style.display = 'block';  // Reset and show the progress bar
-          statusDiv.textContent = `Files queued for processing.`;
+          statusDiv.textContent = 'Files queued for processing.';
           progressBar.style.backgroundColor = ''; // Reset color to default
         } else {
           // If an upload is in progress, do not reset the UI elements
-          statusDiv.textContent = `Files queued for processing. Current operation in progress.`;
+          statusDiv.textContent = 'Files queued for processing. Current operation in progress.';
         }
       });
     });
@@ -108,13 +108,14 @@ document.addEventListener('DOMContentLoaded', function () {
       statusDiv.textContent = `Processing ${data.fileName}... ${data.percentComplete}%`;
       progressBar.style.backgroundColor = ''; // Reset color to default
     } else if (data.nextAttemptTime && data.fileName) {
-      // Show retry state
+      // Show waiting state
       progressContainer.style.display = 'block';
       let scheduledTime = parseInt(data.nextAttemptTime, 10);
-      statusDiv.textContent = `Retrying ${data.fileName} in ... seconds.`;
       progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
       progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
-      startCountdown(scheduledTime, `Retrying ${data.fileName}`);
+
+      statusDiv.textContent = `Waiting to process ${data.fileName} in ... seconds.`;
+      startCountdown(scheduledTime, `Waiting to process ${data.fileName}`);
     } else {
       // No ongoing operation
       progressContainer.style.display = 'none';
@@ -125,14 +126,22 @@ document.addEventListener('DOMContentLoaded', function () {
   // Listen for real-time updates from the background script
   port.onMessage.addListener((message) => {
     if (message.action === 'uploadRetry') {
-      // Handle retry state
+      // Handle waiting state
       progressContainer.style.display = 'block';
       progressBar.style.width = '100%'; // Ensure the progress bar is fully yellow
       progressBar.style.backgroundColor = 'yellow'; // Change to yellow during waiting
 
       let scheduledTime = parseInt(message.nextAttemptTime, 10);
-      statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ... seconds.`;
-      startCountdown(scheduledTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
+
+      if (message.retryCount === 0) {
+        // Waiting due to rate limiting
+        statusDiv.textContent = `Waiting to process ${message.fileName} in ... seconds.`;
+        startCountdown(scheduledTime, `Waiting to process ${message.fileName}`);
+      } else {
+        // Waiting due to retry after error
+        statusDiv.textContent = `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName} in ... seconds.`;
+        startCountdown(scheduledTime, `Retry ${message.retryCount} of ${message.maxRetries} for ${message.fileName}`);
+      }
     } else if (message.action === 'uploadProgress') {
       // Handle progress
       if (countdownInterval) {
@@ -197,7 +206,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (remainingTime <= 0) {
         clearInterval(countdownInterval);
         countdownInterval = null;
-        statusDiv.textContent = `Processing...`;
+        statusDiv.textContent = 'Processing...';
         progressBar.style.backgroundColor = ''; // Reset to default color
       } else {
         statusDiv.textContent = `${statusPrefix} in ${remainingTime} seconds.`;
