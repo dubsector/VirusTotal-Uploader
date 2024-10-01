@@ -2,7 +2,7 @@
 {
   "manifest_version": 3,
   "name": "VirusTotal Uploader",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Upload files to VirusTotal for scanning.",
   "icons": {
     "16": "icons/icon16.png",
