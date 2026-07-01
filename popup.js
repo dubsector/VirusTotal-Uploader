@@ -12,12 +12,8 @@ const fileInput = document.getElementById('fileInput');
 const limitHint = document.getElementById('limitHint');
 const settingsBtn = document.getElementById('settingsBtn');
 
-const statusCard = document.getElementById('statusCard');
-const statusFile = document.getElementById('statusFile');
-const statusPhase = document.getElementById('statusPhase');
-const progressBar = document.getElementById('progressBar');
-const statusMeta = document.getElementById('statusMeta');
-const queueBadge = document.getElementById('queueBadge');
+const notice = document.getElementById('notice');
+const jobList = document.getElementById('jobList');
 
 let countdownTimer = null;
 
@@ -72,7 +68,7 @@ async function handleFiles(fileList) {
   if (files.length === 0) return;
 
   if (!hasKey) {
-    showMeta('Set your VirusTotal API key in settings first.', true);
+    showNotice('Set your VirusTotal API key in settings first.', true);
     return;
   }
 
@@ -97,14 +93,20 @@ async function handleFiles(fileList) {
   if (oversized.length > 0) {
     const cap = isPremium ? '650 MB' : '32 MB';
     const names = oversized.map((f) => f.name).join(', ');
-    showMeta(
+    showNotice(
       `Skipped (over ${cap}): ${names}. ` +
         (isPremium ? '' : 'Larger files need a Premium key or virustotal.com.'),
       true
     );
-  } else if (valid.length > 0) {
-    showMeta(`${valid.length} file${valid.length > 1 ? 's' : ''} queued.`);
+  } else {
+    showNotice('');
   }
+}
+
+function showNotice(text, isError = false) {
+  notice.textContent = text;
+  notice.classList.toggle('error', isError);
+  notice.style.display = text ? 'block' : 'none';
 }
 
 // ---- live status -----------------------------------------------------------
@@ -112,90 +114,99 @@ async function handleFiles(fileList) {
 const port = chrome.runtime.connect({ name: 'popup' });
 port.onMessage.addListener(render);
 
-// Also hydrate from stored state in case a message was missed.
-getLocal(['lastStatus', 'current', 'nextAttemptTime']).then((data) => {
-  if (data.nextAttemptTime && data.current) {
-    render({
-      action: 'waiting',
-      fileName: data.current.fileName,
-      nextAttemptTime: data.nextAttemptTime,
-      retryCount: data.current.retryCount || 0,
-      maxRetries: 3,
-    });
-  } else if (data.lastStatus) {
-    render(data.lastStatus);
-  }
-});
+const ACTIVE_LABELS = {
+  checking: 'Checking',
+  uploading: 'Uploading',
+};
 
+// The background sends a full snapshot: the active job (or null) plus the list
+// of queued files. We rebuild the card list from scratch each time.
 function render(msg) {
+  if (msg.action !== 'render') return;
   clearCountdown();
+  jobList.innerHTML = '';
 
-  switch (msg.action) {
-    case 'idle':
-      statusCard.classList.remove('show');
-      queueBadge.textContent = '';
-      return;
+  if (msg.active) {
+    jobList.appendChild(activeCard(msg.active));
+  }
 
-    case 'queued':
-      setCard(msg.fileName, 'Queued', 'indeterminate');
-      showMeta('');
-      break;
+  (msg.queue || []).forEach((job, index) => {
+    jobList.appendChild(queuedCard(job.fileName, index + 1));
+  });
+}
 
-    case 'phase':
-      setCard(msg.fileName, msg.phase === 'checking' ? 'Checking' : 'Uploading', 'indeterminate');
-      showMeta('');
-      break;
-
+function activeCard(active) {
+  switch (active.state) {
     case 'waiting': {
       const label =
-        msg.retryCount > 0
-          ? `Retry ${msg.retryCount} of ${msg.maxRetries}`
+        active.retryCount > 0
+          ? `Retry ${active.retryCount} of ${active.maxRetries}`
           : 'Rate limited';
-      setCard(msg.fileName, label, 'waiting');
-      startCountdown(msg.nextAttemptTime);
-      break;
+      const card = buildCard(active.fileName, label, 'waiting', '');
+      startCountdown(active.nextAttemptTime, card.querySelector('.meta'));
+      return card;
     }
-
     case 'done':
-      setCard(msg.fileName, msg.existing ? 'Already scanned' : 'Uploaded', 'done');
-      showMeta(msg.existing ? 'Opened existing report.' : 'Opened analysis report.');
-      break;
-
+      return buildCard(
+        active.fileName,
+        active.existing ? 'Already scanned' : 'Uploaded',
+        'done',
+        active.existing ? 'Opened existing report.' : 'Opened analysis report.'
+      );
     case 'error':
-      setCard(msg.fileName, 'Failed', 'error');
-      showMeta(msg.message || 'Something went wrong.', true);
-      break;
-
+      return buildCard(active.fileName, 'Failed', 'error', active.message || 'Something went wrong.', true);
     default:
-      return;
-  }
-
-  if (typeof msg.remaining === 'number') {
-    queueBadge.textContent = msg.remaining > 0 ? `${msg.remaining} in queue` : '';
+      return buildCard(active.fileName, ACTIVE_LABELS[active.state] || 'Working', 'indeterminate', '');
   }
 }
 
-function setCard(fileName, phase, barClass) {
-  statusCard.classList.add('show');
-  statusFile.textContent = fileName || '';
-  statusPhase.textContent = phase;
-  progressBar.className = `progress-bar ${barClass}`;
+function queuedCard(fileName, position) {
+  return buildCard(fileName, `Queued · #${position}`, 'queued', '', false, 'queued');
 }
 
-function showMeta(text, isError = false) {
-  statusMeta.textContent = text;
-  statusMeta.classList.toggle('error', isError);
-  if (text) statusCard.classList.add('show');
+function buildCard(fileName, status, barClass, metaText, metaError = false, extraClass = 'active') {
+  const card = document.createElement('div');
+  card.className = `job-card ${extraClass}`;
+
+  const line = document.createElement('div');
+  line.className = 'job-line';
+
+  const name = document.createElement('span');
+  name.className = 'job-file';
+  name.textContent = fileName || '';
+
+  const status_ = document.createElement('span');
+  status_.className = 'job-status';
+  status_.textContent = status;
+
+  line.append(name, status_);
+
+  const progress = document.createElement('div');
+  progress.className = 'progress';
+  const bar = document.createElement('div');
+  bar.className = `progress-bar ${barClass}`;
+  progress.appendChild(bar);
+
+  card.append(line, progress);
+
+  const meta = document.createElement('div');
+  meta.className = metaError ? 'meta error' : 'meta';
+  meta.textContent = metaText || '';
+  if (!metaText) meta.style.display = 'none';
+  card.appendChild(meta);
+
+  return card;
 }
 
-function startCountdown(nextAttemptTime) {
+function startCountdown(nextAttemptTime, metaEl) {
   const tick = () => {
     const remaining = Math.max(0, Math.ceil((nextAttemptTime - Date.now()) / 1000));
+    metaEl.style.display = 'block';
     if (remaining <= 0) {
-      showMeta('Resuming…');
+      metaEl.textContent = 'Resuming…';
       clearCountdown();
     } else {
-      showMeta(`Waiting ${remaining}s to respect the API limit.`);
+      metaEl.textContent = `Waiting ${remaining}s to respect the API limit.`;
     }
   };
   tick();

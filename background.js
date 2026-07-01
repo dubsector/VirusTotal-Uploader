@@ -5,8 +5,10 @@
 //    memory, so they survive the service worker being torn down while idle.
 //  - Every API call goes through the persistent rate limiter. When no slot is
 //    free (or the server returns 429) we schedule a chrome.alarms wake-up and
-//    stop; resuming re-runs the current job from the top. Re-hashing the file
-//    on resume is cheap and keeps the state machine simple and idempotent.
+//    stop until it fires.
+//  - A job remembers which stage it reached (check -> upload). On resume we do
+//    NOT redo the hash check, so a deferred upload doesn't burn a second
+//    rate-limit slot re-checking a file we already looked up.
 
 import { getSync, getLocal, setLocal, removeLocal } from './lib/storage.js';
 import { getFileData, removeFileData } from './lib/idb.js';
@@ -24,10 +26,23 @@ class Deferred extends Error {}
 let pumping = false;
 let popupPort = null;
 
-// ---- popup messaging -------------------------------------------------------
+// ---- popup rendering -------------------------------------------------------
 
-function post(message) {
-  setLocal({ lastStatus: message });
+// `active` describes the in-flight job (or null when nothing is running). We
+// stash it in storage.local as lastActive so a reopened popup — or a fresh
+// service worker — can rebuild the view without losing terminal states.
+async function emit(active) {
+  await setLocal({ lastActive: active });
+  await sendRender(active);
+}
+
+async function sendRender(active) {
+  const { queue = [] } = await getLocal(['queue']);
+  const message = {
+    action: 'render',
+    active,
+    queue: queue.map((job) => ({ fileName: job.fileName })),
+  };
   if (popupPort) {
     try {
       popupPort.postMessage(message);
@@ -37,9 +52,9 @@ function post(message) {
   }
 }
 
-async function queuedCount() {
-  const { queue = [] } = await getLocal(['queue']);
-  return queue.length;
+async function reemit() {
+  const { lastActive = null } = await getLocal(['lastActive']);
+  await sendRender(lastActive);
 }
 
 // ---- queue intake ----------------------------------------------------------
@@ -54,7 +69,7 @@ async function enqueue(job) {
   const { queue = [] } = await getLocal(['queue']);
   queue.push(job);
   await setLocal({ queue });
-  post({ action: 'queued', fileName: job.fileName, remaining: queue.length });
+  await reemit(); // refresh the queue list without disturbing the active job
   pump();
 }
 
@@ -65,15 +80,19 @@ async function pump() {
   pumping = true;
   try {
     while (true) {
-      let { current } = await getLocal(['current']);
+      const state = await getLocal(['current', 'nextAttemptTime']);
+      let current = state.current;
+
+      // A job is parked waiting for its retry alarm — don't touch it early.
+      // The alarm clears nextAttemptTime and calls pump() when it's due.
+      if (current && state.nextAttemptTime && state.nextAttemptTime > Date.now()) {
+        break;
+      }
 
       if (!current) {
         const { queue = [] } = await getLocal(['queue']);
-        if (queue.length === 0) {
-          post({ action: 'idle' });
-          break;
-        }
-        current = { ...queue[0], retryCount: 0, startTime: Date.now() };
+        if (queue.length === 0) break;
+        current = { ...queue[0], retryCount: 0, stage: 'check' };
         await setLocal({ queue: queue.slice(1), current });
       }
 
@@ -96,40 +115,45 @@ async function pump() {
 async function runJob(job) {
   const { apiKey } = await getLocal(['apiKey']);
   const { premiumAccount } = await getSync(['premiumAccount']);
-  if (!apiKey) {
-    throw new Error('No API key set. Open settings to add one.');
-  }
+  if (!apiKey) throw new Error('No API key set. Open settings to add one.');
   const isPremium = Boolean(premiumAccount);
 
   const blob = await getFileData(job.jobId);
   if (!blob) throw new Error('File data was lost before upload.');
 
-  post({ action: 'phase', phase: 'checking', fileName: job.fileName });
-  const hash = await sha256(await blob.arrayBuffer());
+  // Stage 1: look the file up by hash (skipped on resume once already done).
+  if (job.stage === 'check') {
+    await emit({ fileName: job.fileName, state: 'checking' });
+    const hash = await sha256(await blob.arrayBuffer());
 
-  // Has this file already been analysed? Cheap GET avoids a redundant upload.
-  const existing = await guardedFetch(
-    `${API}/files/${hash}`,
-    { method: 'GET', headers: { 'x-apikey': apiKey } },
-    job,
-    isPremium
-  );
+    const existing = await guardedFetch(
+      `${API}/files/${hash}`,
+      { method: 'GET', headers: { 'x-apikey': apiKey } },
+      job,
+      isPremium
+    );
 
-  if (existing.status === 200) {
-    const data = await existing.json();
-    openTab(`https://www.virustotal.com/gui/file/${data.data.id}/detection`);
-    post({ action: 'done', fileName: job.fileName, existing: true });
-    return;
+    if (existing.status === 200) {
+      const data = await existing.json();
+      openTab(`https://www.virustotal.com/gui/file/${data.data.id}/detection`);
+      await emit({ fileName: job.fileName, state: 'done', existing: true });
+      return;
+    }
+    if (existing.status !== 404) {
+      throw new Error(`Lookup failed (${existing.status}).`);
+    }
+
+    // Passed the check. Persist the stage so a later defer resumes at upload
+    // instead of re-running (and re-rate-limiting) this lookup.
+    job = { ...job, stage: 'upload' };
+    await setLocal({ current: job });
   }
-  if (existing.status !== 404) {
-    throw new Error(`Lookup failed (${existing.status}).`);
-  }
 
-  // Not seen before: upload it.
-  post({ action: 'phase', phase: 'uploading', fileName: job.fileName });
+  // Stage 2: upload.
+  await emit({ fileName: job.fileName, state: 'uploading' });
   const analysisId = await uploadFile(blob, job, apiKey, isPremium);
   openTab(`https://www.virustotal.com/gui/file-analysis/${analysisId}`);
-  post({ action: 'done', fileName: job.fileName, existing: false });
+  await emit({ fileName: job.fileName, state: 'done', existing: false });
 }
 
 async function uploadFile(blob, job, apiKey, isPremium) {
@@ -194,13 +218,12 @@ async function defer(job, waitMs, retryCount, throttled) {
   const nextAttemptTime = Date.now() + Math.max(waitMs, 0);
   await setLocal({ current: { ...job, retryCount }, nextAttemptTime });
   chrome.alarms.create(ALARM, { when: nextAttemptTime });
-  post({
-    action: 'waiting',
+  await emit({
     fileName: job.fileName,
+    state: 'waiting',
     nextAttemptTime,
     retryCount: throttled ? 0 : retryCount,
     maxRetries: MAX_RETRIES,
-    remaining: await queuedCount(),
   });
 }
 
@@ -211,8 +234,10 @@ async function handleError(job, err) {
     await defer({ ...job, retryCount }, RETRY_DELAY_MS, retryCount, false);
     return false;
   }
-  post({ action: 'error', fileName: job.fileName, message: err.message });
   await finishJob(job);
+  // Leave the error on screen (don't overwrite with idle) so it survives a
+  // closed popup and is visible when reopened.
+  await emit({ fileName: job.fileName, state: 'error', message: err.message });
   return true;
 }
 
@@ -254,19 +279,5 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => {
     popupPort = null;
   });
-
-  // Replay the latest known state so a freshly opened popup is in sync.
-  getLocal(['lastStatus', 'current', 'nextAttemptTime']).then((data) => {
-    if (data.nextAttemptTime && data.current) {
-      port.postMessage({
-        action: 'waiting',
-        fileName: data.current.fileName,
-        nextAttemptTime: data.nextAttemptTime,
-        retryCount: data.current.retryCount || 0,
-        maxRetries: MAX_RETRIES,
-      });
-    } else if (data.lastStatus) {
-      port.postMessage(data.lastStatus);
-    }
-  });
+  reemit(); // push the current view to the freshly opened popup
 });
