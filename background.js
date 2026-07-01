@@ -23,6 +23,10 @@ const ALARM = 'vtRetry';
 // Signal used to unwind out of a job when we've deferred to an alarm.
 class Deferred extends Error {}
 
+// The daily/monthly quota is spent — retrying in 60s is pointless (it resets on
+// VirusTotal's schedule, not ours), so we surface it and stop rather than loop.
+class QuotaError extends Error {}
+
 let pumping = false;
 let popupPort = null;
 
@@ -101,6 +105,14 @@ async function pump() {
         await finishJob(current);
       } catch (err) {
         if (err instanceof Deferred) break; // alarm scheduled; resume later
+        if (err instanceof QuotaError) {
+          // Quota is gone; the rest of the queue would fail the same way.
+          // Drop this file, report it, and stop — remaining files stay queued
+          // and will be retried on next launch or when a new file is added.
+          await finishJob(current);
+          await emit({ fileName: current.fileName, state: 'error', message: err.message });
+          break;
+        }
         const moveOn = await handleError(current, err);
         if (!moveOn) break; // retry scheduled
       }
@@ -135,8 +147,11 @@ async function runJob(job) {
 
     if (existing.status === 200) {
       const data = await existing.json();
-      openTab(`https://www.virustotal.com/gui/file/${data.data.id}/detection`);
-      await emit({ fileName: job.fileName, state: 'done', existing: true });
+      await complete(
+        job.fileName,
+        `https://www.virustotal.com/gui/file/${data.data.id}/detection`,
+        true
+      );
       return;
     }
     if (existing.status !== 404) {
@@ -152,8 +167,58 @@ async function runJob(job) {
   // Stage 2: upload.
   await emit({ fileName: job.fileName, state: 'uploading' });
   const analysisId = await uploadFile(blob, job, apiKey, isPremium);
-  openTab(`https://www.virustotal.com/gui/file-analysis/${analysisId}`);
-  await emit({ fileName: job.fileName, state: 'done', existing: false });
+  await complete(
+    job.fileName,
+    `https://www.virustotal.com/gui/file-analysis/${analysisId}`,
+    false
+  );
+}
+
+// Deliver a finished result: open the report in a background tab (so it's
+// waiting without stealing focus) and fire a notification that works even when
+// the popup is closed. Clicking the notification opens the report.
+async function complete(fileName, url, existing) {
+  chrome.tabs.create({ url, active: false });
+
+  const { notify } = await getSync(['notify']);
+  if (notify !== false) {
+    const id = `vt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const { notifLinks = {} } = await getLocal(['notifLinks']);
+    notifLinks[id] = url;
+    await setLocal({ notifLinks });
+
+    chrome.notifications.create(id, {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: existing ? 'Already on VirusTotal' : 'Uploaded to VirusTotal',
+      message: fileName,
+      priority: 0,
+    });
+  }
+
+  await emit({ fileName, state: 'done', existing });
+}
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  const url = await takeNotifLink(id);
+  if (url) chrome.tabs.create({ url });
+  chrome.notifications.clear(id);
+});
+
+// Drop the stored link when a notification is dismissed so the map can't grow
+// without bound.
+chrome.notifications.onClosed.addListener((id) => {
+  takeNotifLink(id);
+});
+
+async function takeNotifLink(id) {
+  const { notifLinks = {} } = await getLocal(['notifLinks']);
+  const url = notifLinks[id];
+  if (url !== undefined) {
+    delete notifLinks[id];
+    await setLocal({ notifLinks });
+  }
+  return url;
 }
 
 async function uploadFile(blob, job, apiKey, isPremium) {
@@ -203,6 +268,17 @@ async function guardedFetch(url, options, job, isPremium) {
 
   if (response.status === 429) {
     await releaseSlot();
+
+    // Distinguish "you're going too fast" (wait and retry) from "your daily or
+    // monthly quota is gone" (waiting minutes won't help).
+    const { quota, message } = await classify429(response);
+    if (quota) {
+      throw new QuotaError(
+        message ||
+          'VirusTotal quota reached. The free tier allows very few lookups per day — upgrade to Premium or try again later.'
+      );
+    }
+
     const retryAfter = parseInt(response.headers.get('Retry-After'), 10);
     const waitMs = Number.isFinite(retryAfter) ? retryAfter * 1000 : RETRY_DELAY_MS;
     await defer(job, waitMs, job.retryCount, /* throttled */ true);
@@ -210,6 +286,17 @@ async function guardedFetch(url, options, job, isPremium) {
   }
 
   return response;
+}
+
+async function classify429(response) {
+  try {
+    const body = await response.clone().json();
+    const code = body?.error?.code || '';
+    const message = body?.error?.message || '';
+    return { quota: /quota/i.test(code) || /quota/i.test(message), message };
+  } catch {
+    return { quota: false, message: '' };
+  }
 }
 
 // ---- retries & alarms ------------------------------------------------------
@@ -265,10 +352,6 @@ async function sha256(arrayBuffer) {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-function openTab(url) {
-  chrome.tabs.create({ url });
 }
 
 // ---- popup connection ------------------------------------------------------

@@ -21,7 +21,8 @@
   "options_page": "settings.html",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "https://www.virustotal.com/*"

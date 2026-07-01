@@ -3,6 +3,7 @@ import { applyTheme } from './lib/theme.js';
 
 const apiKeyInput = document.getElementById('apiKey');
 const premiumCheckbox = document.getElementById('premiumAccount');
+const notifyToggle = document.getElementById('notifyToggle');
 const themeRadios = document.querySelectorAll('input[name="theme"]');
 const saveButton = document.getElementById('saveButton');
 const closeButton = document.getElementById('closeButton');
@@ -20,9 +21,10 @@ function selectedTheme() {
   return checked ? checked.value : 'system';
 }
 
-Promise.all([getLocal(['apiKey']), getSync(['premiumAccount', 'theme'])]).then(
+Promise.all([getLocal(['apiKey']), getSync(['premiumAccount', 'theme', 'notify'])]).then(
   ([local, sync]) => {
     premiumCheckbox.checked = Boolean(sync.premiumAccount);
+    notifyToggle.checked = sync.notify !== false; // default on
     const theme = sync.theme || 'system';
     const radio = document.querySelector(`input[name="theme"][value="${theme}"]`);
     if (radio) radio.checked = true;
@@ -53,7 +55,11 @@ saveButton.addEventListener('click', async () => {
       apiKeyInput.value = PLACEHOLDER;
     }
 
-    await setSync({ premiumAccount: premiumCheckbox.checked, theme: selectedTheme() });
+    await setSync({
+      premiumAccount: premiumCheckbox.checked,
+      notify: notifyToggle.checked,
+      theme: selectedTheme(),
+    });
     flash('Settings saved.');
   } catch {
     flash('Could not save settings.', true);
