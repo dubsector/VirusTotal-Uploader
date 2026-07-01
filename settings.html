@@ -1,63 +1,159 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-theme="system">
 <head>
-  <title>Settings - VirusTotal Uploader</title>
+  <meta charset="UTF-8" />
+  <title>Settings — VirusTotal Uploader</title>
+  <link rel="stylesheet" href="styles.css" />
   <style>
     body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-      width: 300px;
+      width: 380px;
+      padding: 22px;
     }
-    label {
-      display: block;
-      margin-bottom: 5px;
-    }
-    input[type="text"], input[type="password"] {
-      width: 100%;
-      padding: 5px;
-      margin-bottom: 10px;
-    }
-    button {
-      padding: 5px 10px;
-      margin-right: 10px;
-    }
-    #message {
-      margin-top: 10px;
-      font-size: 14px;
-    }
-    #buttonsContainer {
+
+    .field {
       margin-top: 20px;
     }
-    .inline-checkbox {
+
+    .toggle-row {
       display: flex;
-      align-items: center;
-      margin-bottom: 10px;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 22px;
     }
-    .inline-checkbox label {
-      margin: 0;
-      margin-right: 10px;
+
+    .toggle-row .label-group {
+      flex: 1;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 42px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .slider::before {
+      content: '';
+      position: absolute;
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.15s ease;
+    }
+
+    .switch input:checked + .slider {
+      background: var(--accent);
+    }
+
+    .switch input:checked + .slider::before {
+      transform: translateX(18px);
+    }
+
+    .actions {
+      margin-top: 26px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .actions .spacer {
+      flex: 1;
+    }
+
+    #message {
+      margin-top: 14px;
+      font-size: 13px;
+      min-height: 18px;
+      color: var(--success);
+    }
+
+    #message.error {
+      color: var(--danger);
     }
   </style>
 </head>
 <body>
-  <h2>Settings</h2>
-  <label for="apiKey">VirusTotal API Key:</label>
-  <!-- Password field to show dots when API key is stored -->
-  <input type="password" id="apiKey" placeholder="Enter your API key">
-
-  <div class="inline-checkbox">
-    <label for="premiumAccount">Premium Account:</label>
-    <input type="checkbox" id="premiumAccount">
+  <div class="header">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" />
+      <span>Settings</span>
+    </div>
   </div>
-  <p>Only enable if you have a Premium VirusTotal account. Increases file upload limit to 550MB.</p>
 
-  <div id="buttonsContainer">
-    <button id="saveButton">Save</button>
-    <button id="closeButton">Close</button>
-    <button id="donateButton">Donate</button>
+  <div class="field">
+    <label for="apiKey">VirusTotal API key</label>
+    <input type="password" id="apiKey" placeholder="Paste your API key" autocomplete="off" />
+    <p class="hint">
+      Get one from your
+      <a href="https://www.virustotal.com/gui/my-apikey" target="_blank" rel="noreferrer">VirusTotal account</a>.
+      Clear the field and save to remove it.
+    </p>
   </div>
-  <div id="message"></div>
 
-  <script src="settings.js"></script>
+  <div class="toggle-row">
+    <div class="label-group">
+      <label for="premiumAccount">Premium account</label>
+      <p class="hint">Raises the per-file limit to 650&nbsp;MB and relaxes throttling. Enable only with a Premium API key.</p>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="premiumAccount" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-row">
+    <div class="label-group">
+      <label for="notifyToggle">Notify when finished</label>
+      <p class="hint">Show a notification when an upload or lookup completes, even if the popup is closed.</p>
+    </div>
+    <label class="switch">
+      <input type="checkbox" id="notifyToggle" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="field">
+    <label for="themeSelect">Theme</label>
+    <div class="segmented" role="radiogroup" aria-label="Theme">
+      <input type="radio" name="theme" id="themeSystem" value="system" />
+      <label for="themeSystem">System</label>
+      <input type="radio" name="theme" id="themeLight" value="light" />
+      <label for="themeLight">Light</label>
+      <input type="radio" name="theme" id="themeDark" value="dark" />
+      <label for="themeDark">Dark</label>
+    </div>
+    <p class="hint">System follows your browser's appearance.</p>
+  </div>
+
+  <div class="actions">
+    <button id="saveButton" class="btn-primary">Save</button>
+    <button id="closeButton" class="btn-secondary">Close</button>
+    <span class="spacer"></span>
+    <button id="donateButton" class="btn-secondary">Donate</button>
+  </div>
+
+  <div id="message" aria-live="polite"></div>
+
+  <script type="module" src="settings.js"></script>
 </body>
 </html>
