@@ -78,6 +78,20 @@ If you prefer to compile the extension yourself, follow these steps:
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
+## Development
+
+The extension is plain ES modules with no build step — load the folder directly via `chrome://extensions` → "Load unpacked".
+
+Tooling:
+
+```bash
+npm install      # dev dependencies (ESLint)
+npm run lint     # lint all JavaScript
+npm run validate # sanity-check manifest.json
+```
+
+CI runs the same lint and validation on every push and pull request, and uploads a packaged `.zip` build artifact.
+
 ## Contributing
 
 Contributions are welcome! Please open an [issue](https://github.com/dubsector/VirusTotal-Uploader/issues) or submit a pull request with your improvements.

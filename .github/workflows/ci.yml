@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: Validate manifest
+        run: npm run validate
+
+  package:
+    name: Package extension
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build zip
+        run: |
+          zip -r virustotal-uploader.zip \
+            manifest.json \
+            background.js \
+            popup.html popup.js \
+            settings.html settings.js \
+            styles.css \
+            icons lib \
+            LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: virustotal-uploader
+          path: virustotal-uploader.zip
