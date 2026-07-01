@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Web upload</title>
+  <style>
+    /* Sized for the action popup (chromeless, anchored to the toolbar icon).
+       Chrome caps action popups at 600px tall, so 598 keeps us just under it.
+       Tune --h if the bottom banner needs to sit tighter. */
+    :root {
+      --w: 484px;
+      --h: 598px;
+    }
+
+    html, body {
+      margin: 0;
+      width: var(--w);
+      height: var(--h);
+      background: #0b0b0f;
+      overflow: hidden;
+    }
+
+    iframe {
+      display: block;
+      width: var(--w);
+      height: var(--h);
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <iframe
+    id="vtFrame"
+    src="https://www.virustotal.com/gui/home/upload"
+    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-storage-access-by-user-activation"
+    allow="clipboard-read; clipboard-write"
+  ></iframe>
+</body>
+</html>
