@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VirusTotal Uploader",
   "version": "69.0.0",
-  "description": "Upload files to VirusTotal for scanning through your own VirusTotal web session — no API key or quota needed.",
+  "description": "Upload files to VirusTotal from Chrome and open the analysis report when the scan is ready.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon16.png",
@@ -19,7 +19,6 @@
     "default_title": "VirusTotal Uploader"
   },
   "permissions": [
-    "notifications",
     "declarativeNetRequest"
   ],
   "host_permissions": [

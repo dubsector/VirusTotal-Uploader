@@ -25,12 +25,4 @@ function openWebResult(url) {
   lastResultAt = now;
 
   chrome.tabs.create({ url, active: true });
-
-  chrome.notifications.create(`vtweb-${now}`, {
-    type: 'basic',
-    iconUrl: 'icons/icon128.png',
-    title: 'VirusTotal result ready',
-    message: 'Opened the scan report in a new tab.',
-    priority: 0,
-  });
 }
