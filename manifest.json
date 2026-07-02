@@ -18,9 +18,7 @@
     "default_popup": "upload.html",
     "default_title": "VirusTotal Uploader"
   },
-  "options_page": "settings.html",
   "permissions": [
-    "storage",
     "notifications",
     "declarativeNetRequest"
   ],

@@ -9,8 +9,6 @@
 // into the frame) reports the result URL once VT navigates there. We pop it
 // into a real tab, which takes focus and closes the popup.
 
-import { getSync } from './lib/storage.js';
-
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.action === 'webResult' && message.url) {
     openWebResult(message.url);
@@ -21,21 +19,18 @@ chrome.runtime.onMessage.addListener((message) => {
 // same result; only open the first.
 let lastResultAt = 0;
 
-async function openWebResult(url) {
+function openWebResult(url) {
   const now = Date.now();
   if (now - lastResultAt < 8000) return;
   lastResultAt = now;
 
   chrome.tabs.create({ url, active: true });
 
-  const { notify } = await getSync(['notify']);
-  if (notify !== false) {
-    chrome.notifications.create(`vtweb-${now}`, {
-      type: 'basic',
-      iconUrl: 'icons/icon128.png',
-      title: 'VirusTotal result ready',
-      message: 'Opened the scan report in a new tab.',
-      priority: 0,
-    });
-  }
+  chrome.notifications.create(`vtweb-${now}`, {
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: 'VirusTotal result ready',
+    message: 'Opened the scan report in a new tab.',
+    priority: 0,
+  });
 }

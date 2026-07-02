@@ -35,10 +35,10 @@ jobs:
           zip -r virustotal-uploader.zip \
             manifest.json \
             background.js \
-            popup.html popup.js \
-            settings.html settings.js \
-            styles.css \
-            icons lib \
+            upload.html \
+            vt-content.js \
+            rules.json \
+            icons \
             LICENSE
       - uses: actions/upload-artifact@v4
         with:

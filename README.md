@@ -1,88 +1,42 @@
-# VirusTotal-Uploader
+<div align="center">
 
-Upload files to [VirusTotal](https://www.virustotal.com/) for scanning directly from your browser.
+# VirusTotal Uploader
+
+One click from your toolbar to a [VirusTotal](https://www.virustotal.com/) scan — no API key, no quota.
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ofpejkncbelgldkaimdoakjegifjeljj?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/virustotal-uploader/ofpejkncbelgldkaimdoakjegifjeljj)
 [![GitHub Releases](https://img.shields.io/github/release/dubsector/VirusTotal-Uploader.svg?label=Releases)](https://github.com/dubsector/VirusTotal-Uploader/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-## Usage
+</div>
 
-Easily upload files to VirusTotal for malware scanning directly from your browser. This extension provides a seamless way to check files for viruses or malicious content without leaving your browsing session.
+---
 
-## Installation
+## How it works
 
-You can install **VirusTotal-Uploader** through one of the following methods:
+Click the toolbar icon. A compact window opens with VirusTotal's own upload page — your normal web session, their upload limits, no API key sitting in extension storage. Pick a file, confirm, solve the captcha if VirusTotal asks for one, and the scan report opens in a new tab the moment it's ready.
 
-### 1. Chrome Web Store
+> **Experimental build.** To show `virustotal.com` inside the extension, this version relaxes its framing headers via `declarativeNetRequest`. That's a fragile trick — it depends on VirusTotal's frontend not changing — and it's **not published to the Chrome Web Store**. Install it unpacked if you want to try it (see below).
 
-Install the extension directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/virustotal-uploader/ofpejkncbelgldkaimdoakjegifjeljj).
+## Install
+
+**Load unpacked (current, experimental build)**
+
+1. Download or clone this repository.
+2. Open `chrome://extensions` and enable **Developer mode** (top right).
+3. Click **Load unpacked** and select the project folder.
+
+**Chrome Web Store / GitHub Releases**
+
+The published listing below tracks the stable API-key-based flow, not the experimental build in this branch.
 
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ofpejkncbelgldkaimdoakjegifjeljj?label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/virustotal-uploader/ofpejkncbelgldkaimdoakjegifjeljj)
 
-### 2. GitHub Releases
-
-Download the latest release from the [Releases Page](https://github.com/dubsector/VirusTotal-Uploader/releases) and install it manually.
-
-**Manual Installation from Releases:**
-
-1. **Download the Extension Package:**
-   - Go to the [Releases Page](https://github.com/dubsector/VirusTotal-Uploader/releases).
-   - Download the `.zip` file of the latest release.
-
-2. **Unzip the Downloaded File:**
-   - Extract the contents of the downloaded `.zip` file to a desired location on your computer.
-
-3. **Load the Extension in Chrome:**
-   - Open Chrome and navigate to `chrome://extensions/`.
-   - Enable "Developer mode" using the toggle in the top right corner.
-   - Click on "Load unpacked" and select the extracted folder from the downloaded `.zip` file.
-
-### 3. Source
-
-If you prefer to compile the extension yourself, follow these steps:
-
-1. **Download the Source Code:**
-   - Download the `.zip` for the [main](https://github.com/dubsector/VirusTotal-Uploader)  branch containing the source code of the latest release.
-
-2. **Unzip the Downloaded File:**
-   - Extract the contents of the downloaded `.zip` file to a desired location on your computer.
-
-3. **Load the Extension in Chrome:**
-   - Open Chrome and navigate to `chrome://extensions/`.
-   - Enable "Developer mode" using the toggle in the top right corner.
-   - Click on "Load unpacked" and select the extracted folder.
-
-> **Note:** forking the extension allows you to customize the extension or contribute to its development.
-
-## Usage
-
-1. **Obtain API Key:**
-   - Sign up for a [VirusTotal API key](https://www.virustotal.com/gui/join-us).
-
-2. **Set Up Extension:**
-   - Click the **VirusTotal-Uploader** icon in the Chrome toolbar.
-   - Navigate to settings and enter your API key.
-
-3. **Upload Files:**
-   - Click the extension icon.
-   - Select the file you want to upload.
-   - Click "Upload to VirusTotal" to initiate scanning.
-   - View the scan results once the upload is complete.
-
-## Disclaimer
-
-**This extension is not affiliated with VirusTotal. Users must provide their own VirusTotal API key to use the service. All VirusTotal rights, logos, and trademarks are owned exclusively by VirusTotal.**
-
-## License
-
-This project is licensed under the [GNU General Public License v3.0](LICENSE).
+Or grab a packaged `.zip` from the [Releases page](https://github.com/dubsector/VirusTotal-Uploader/releases), unzip it, and load it unpacked the same way.
 
 ## Development
 
-The extension is plain ES modules with no build step — load the folder directly via `chrome://extensions` → "Load unpacked".
-
-Tooling:
+Plain ES modules, no build step — edit and reload via `chrome://extensions`.
 
 ```bash
 npm install      # dev dependencies (ESLint)
@@ -90,13 +44,16 @@ npm run lint     # lint all JavaScript
 npm run validate # sanity-check manifest.json
 ```
 
-CI runs the same lint and validation on every push and pull request, and uploads a packaged `.zip` build artifact.
+CI runs the same lint and validation on every push and pull request, and uploads a packaged `.zip` artifact.
+
+## Disclaimer
+
+This extension is not affiliated with VirusTotal. All VirusTotal rights, logos, and trademarks are owned exclusively by VirusTotal.
+
+## License
+
+[GNU General Public License v3.0](LICENSE)
 
 ## Contributing
 
-Contributions are welcome! Please open an [issue](https://github.com/dubsector/VirusTotal-Uploader/issues) or submit a pull request with your improvements.
-
-## Acknowledgements
-
-- [VirusTotal](https://www.virustotal.com/) for providing the malware scanning service.
-- [Chrome Extensions Documentation](https://developer.chrome.com/docs/extensions/) for guidance on extension development.
+Issues and pull requests welcome.
