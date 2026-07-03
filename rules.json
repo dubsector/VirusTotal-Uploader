@@ -13,7 +13,8 @@
     },
     "condition": {
       "requestDomains": ["virustotal.com"],
-      "resourceTypes": ["sub_frame"]
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["pfdmmajdbbngakfhhaimfobgfjdacbml"]
     }
   }
 ]
