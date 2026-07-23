@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyfmTESbK2P37GWSrL/05vbAE0+LtncTllNl7mCVruiS7P2/EN558GV4Z9pOIIkFNTkhKGWOm4fv/8fAPXoRTvQ6hLoQXdKi2c87EifarTLBuuPbs2pwIR+yOme8N80hz9yL5PXyzObxEk8dF7zFs+llE3smSqsxzwQN9QeeHpa61VSvyNYQA9kEdEiaOKgbrxGvLBPCNJIElLXq4Vw/LDsUxNvBfmC0OliNg2so/6DenAE3MS7bjhM+M7T4CpYtRxuEUuIBSz74kKolGx6BNxelQglcmrcuajxMa8p7GIXdjsellCL0N06AZlYWEXV6JDLqAtr4ZhJBz0h/WDaHS5wIDAQAB",
   "name": "VirusTotal Uploader",
-  "version": "69.0.2",
+  "version": "69.0.4",
   "description": "Upload files to VirusTotal from Chrome and open the analysis report when the scan is ready.",
   "minimum_chrome_version": "116",
   "icons": {
