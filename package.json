@@ -1,6 +1,6 @@
 {
   "name": "virustotal-uploader",
-  "version": "69.0.0",
+  "version": "69.0.3",
   "private": true,
   "type": "module",
   "description": "Chrome extension to upload files to VirusTotal for scanning.",
